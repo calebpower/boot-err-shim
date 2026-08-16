@@ -4,6 +4,25 @@
 # dependencies, so installing it is copying files and choosing an init system.
 
 PYTHON      ?= python3
+
+# Absolute path to the interpreter, baked into the zipapp's shebang.
+#
+# `#!/usr/bin/env python3` looks portable and breaks under rc(8) and cron,
+# whose PATH is /sbin:/bin:/usr/sbin:/usr/bin. FreeBSD keeps python3 in
+# /usr/local/bin, which is not on that list, so the daemon starts fine from an
+# interactive shell and fails at boot with "env: python3: No such file or
+# directory". This is the same reason FreeBSD ports carry USES=shebangfix.
+#
+# Resolved by name rather than from sys.executable, so it lands on the stable
+# /usr/local/bin/python3 symlink instead of a versioned binary that a minor
+# upgrade would move out from under us.
+#
+# Override when cross-installing -- building on Linux for a FreeBSD target
+# needs INTERPRETER=/usr/local/bin/python3.
+INTERPRETER ?= $(shell command -v $(PYTHON) 2>/dev/null || \
+                 $(PYTHON) -c 'import sys; print(sys.executable)' 2>/dev/null || \
+                 echo /usr/bin/env $(PYTHON))
+
 IMAGE       ?= boot-err-shim-e2e
 STAGES      ?= all
 DESTDIR     ?=
@@ -66,9 +85,9 @@ bundle:
 		> build/pyz/__main__.py
 	$(PYTHON) -m zipapp build/pyz \
 		-o boot-err-shim.pyz \
-		-p '/usr/bin/env python3' \
+		-p '$(INTERPRETER)' \
 		-c
-	@echo 'wrote boot-err-shim.pyz'
+	@echo "wrote boot-err-shim.pyz (interpreter: $(INTERPRETER))"
 
 # -- installation ------------------------------------------------------
 

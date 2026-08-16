@@ -987,6 +987,27 @@ stage_service_linux() {
         fail "the bundle does not run"
     fi
 
+    # The shebang has to be an absolute interpreter, not `env python3`.
+    # Under rc(8) and cron the PATH is /sbin:/bin:/usr/sbin:/usr/bin, and on
+    # FreeBSD python3 lives in /usr/local/bin, so an env shebang starts fine
+    # by hand and fails at boot.
+    shebang=$(head -1 "$WORK/boot-err-shim.pyz" | sed 's/^#!//')
+    printf '  shebang: %s\n' "$shebang"
+    case "$shebang" in
+        /usr/bin/env*) fail "the bundle uses an env shebang" ;;
+        /*)            ok "the bundle names an absolute interpreter" ;;
+        *)             fail "unrecognised shebang: $shebang" ;;
+    esac
+
+    # And it has to run with the PATH rc(8) actually provides.
+    if (cd /tmp && env -i PATH=/sbin:/bin:/usr/sbin:/usr/bin \
+            "$WORK/boot-err-shim.pyz" --version) > /tmp/pyz-rc.log 2>&1; then
+        ok "the bundle runs under rc's restricted PATH: $(cat /tmp/pyz-rc.log)"
+    else
+        sed 's/^/      /' /tmp/pyz-rc.log
+        fail "the bundle does not run under rc's PATH"
+    fi
+
     if make -C "$WORK" install-linux > /tmp/install.log 2>&1; then
         ok "make install-linux completed"
     else

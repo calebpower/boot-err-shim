@@ -32,6 +32,18 @@ load_rc_config $name
 pidfile="/var/run/${name}.pid"
 shim="/usr/local/sbin/boot-err-shim"
 
+# rc(8) runs with PATH=/sbin:/bin:/usr/sbin:/usr/bin, which does not include
+# /usr/local/bin -- where FreeBSD keeps python3. The shim is a zipapp, so its
+# shebang has to resolve, and a bundle built with `#!/usr/bin/env python3`
+# fails here with "env: python3: No such file or directory" while working
+# perfectly from an interactive shell.
+#
+# `make bundle` bakes an absolute interpreter path for this reason, so this is
+# the second line of defence: it keeps a bundle copied from another machine
+# working, and ping(8) and daemon(8) are found either way.
+PATH="${PATH}:/usr/local/sbin:/usr/local/bin"
+export PATH
+
 # procname must name whatever owns the pid in $pidfile, and with daemon -P
 # that is daemon(8) itself, not the shim. Two reasons not to point it at the
 # shim: the pid belongs to the supervisor, and the shim is a zipapp with a
@@ -63,6 +75,28 @@ boot_err_shim_precmd()
 	if [ ! -f "${boot_err_shim_config}" ]; then
 		err 1 "${boot_err_shim_config} does not exist. Copy" \
 		    "${boot_err_shim_config}.sample and edit it."
+	fi
+
+	# Does the shim's shebang actually resolve?
+	#
+	# Checked explicitly because the failure is otherwise a bare
+	# "env: python3: No such file or directory" with nothing naming the
+	# program, the interpreter or the reason -- and it only happens under
+	# rc(8), so it looks like the service is broken when the very same
+	# command works by hand.
+	_shebang=$(head -1 "${shim}" 2>/dev/null | sed 's/^#!//')
+	_interp=${_shebang%% *}
+	if [ "${_interp}" = "/usr/bin/env" ]; then
+		_wanted=${_shebang#* }
+		if ! command -v "${_wanted}" > /dev/null 2>&1; then
+			err 1 "${shim} asks for '${_wanted}' via env, and it is not on" \
+			    "rc's PATH (${PATH}). Rebuild on this host with: make" \
+			    "install-freebsd -- which bakes an absolute interpreter" \
+			    "path -- or pass INTERPRETER=/usr/local/bin/python3."
+		fi
+	elif [ -n "${_interp}" ] && [ ! -x "${_interp}" ]; then
+		err 1 "${shim} was built for interpreter ${_interp}, which is not" \
+		    "executable on this host. Rebuild here with: make install-freebsd"
 	fi
 
 	if ! pw usershow "${boot_err_shim_user}" > /dev/null 2>&1; then

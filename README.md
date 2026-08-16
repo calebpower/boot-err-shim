@@ -121,6 +121,22 @@ make bundle          # produces boot-err-shim.pyz
 scp boot-err-shim.pyz root@host:/usr/local/sbin/boot-err-shim
 ```
 
+`make bundle` bakes the **absolute** path of the building host's interpreter
+into the shebang. `#!/usr/bin/env python3` looks more portable and is worse:
+rc(8) and cron run with `PATH=/sbin:/bin:/usr/sbin:/usr/bin`, FreeBSD keeps
+python3 in `/usr/local/bin`, and the result is a daemon that runs perfectly by
+hand and fails at boot with `env: python3: No such file or directory`.
+
+So if you build somewhere other than the target, say where python3 lives
+there:
+
+```sh
+make bundle INTERPRETER=/usr/local/bin/python3     # building for FreeBSD
+```
+
+Building on the target with `make install-freebsd` gets this right on its own,
+and `service boot_err_shim start` checks the shebang resolves before it tries.
+
 ### From a checkout, with uv
 
 ```sh
