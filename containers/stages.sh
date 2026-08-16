@@ -145,13 +145,16 @@ show_message() {
     # what makes a single character arrive at all: in the default canonical
     # mode the tty buffers until a newline, so `dd count=1` blocks forever on
     # a bare 'Y' -- which looked exactly like the keystroke never being sent.
+    # $1: optional suffix on the last line, for a blinking caret.
+    # $2: optional full replacement for the last line, for different wording.
     rm -f "$KEYPRESS_FILE"
     write_console_script
+    third="${2:-${THE_MESSAGE_3}${1:-}}"
     KEYPRESS_FILE="$KEYPRESS_FILE" DISPLAY=:1 xterm \
         -fn "$FONT" -bg black -fg white -b 0 +sb \
         -geometry "80x25+0+0" \
         -e /tmp/vnc/console.sh \
-        "$THE_MESSAGE_1" "$THE_MESSAGE_2" "$THE_MESSAGE_3" \
+        "$THE_MESSAGE_1" "$THE_MESSAGE_2" "$third" \
         > /tmp/vnc/xterm.log 2>&1 &
     XTERM_PID=$!
     sleep 3
@@ -564,29 +567,93 @@ VIEWER
     kill "$viewer" 2>/dev/null || true
     wait "$viewer" 2>/dev/null || true
 
-    # Now the interesting half: a human's mouse pointer sitting over the
-    # message. Xvnc paints the cursor into the framebuffer, so it changes the
-    # very pixels the region matcher compares.
-    show_message                       # reset the console and the recorder
+    stop_console
+}
+
+stage_caret() {
+    banner "caret: the prompt blinks, as firmware prompts do"
+    # The case that actually applies to a POST screen. There is no mouse
+    # pointer at a BIOS or UEFI prompt, but firmware routinely leaves a
+    # blinking caret after the text, and that toggles pixels inside the
+    # calibrated region with nobody touching anything.
+    #
+    # It has to work in both directions, because which half of the blink the
+    # operator happened to calibrate on is pure chance.
+
+    # -- calibrated with the caret lit, seen without it -----------------
+    start_vnc
+    show_message "_"
+    write_config /tmp/caret.conf
+    shim configure -c /tmp/caret.conf > /tmp/caret-cal.log 2>&1
+    check $? "calibrated with a caret after the prompt"
+    stop_console
+
+    start_vnc
+    show_message                       # caret blinked off
     before=$(keypress_count)
-    DISPLAY=:1 xdotool mousemove 200 20 2>/dev/null || true
+    shim run -c /tmp/caret.conf --once > /tmp/caret-off.log 2>&1
+    check $? "a cycle completed with the caret gone"
     sleep 2
-
-    shim run -c /tmp/shared.conf --once > /tmp/cursor-run.log 2>&1
-    check $? "a cycle completed with a pointer over the message"
-
-    if grep -q "key.pressed" /tmp/cursor-run.log; then
-        ok "the pointer did not stop it recognising the prompt"
+    if [ "$(keypress_count)" != "$before" ]; then
+        ok "still recognised the prompt with the caret off"
+        printf '  matcher: %s\n' \
+            "$(grep -o 'detail=[a-z+-]*' /tmp/caret-off.log | tail -1)"
     else
-        # Also acceptable, and the safer direction: refuse rather than guess.
-        ok "it declined to act with the screen obscured (fail-safe)"
-        grep -q "detect.no_match" /tmp/cursor-run.log \
-            && ok "and recorded why" \
-            || fail "it declined without saying why"
+        sed 's/^/      /' /tmp/caret-off.log
+        fail "a blinking caret stopped it recognising the prompt"
+    fi
+    stop_console
+
+    # -- calibrated without the caret, seen with it ---------------------
+    start_vnc
+    show_message
+    rm -f "$STATE/calibration.toml"
+    shim configure -c /tmp/caret.conf > /dev/null 2>&1
+    check $? "calibrated with no caret"
+    stop_console
+
+    start_vnc
+    show_message "_"                   # caret blinked on
+    before=$(keypress_count)
+    shim run -c /tmp/caret.conf --once > /tmp/caret-on.log 2>&1
+    check $? "a cycle completed with the caret lit"
+    sleep 2
+    if [ "$(keypress_count)" != "$before" ]; then
+        ok "still recognised the prompt with the caret on"
+        printf '  matcher: %s\n' \
+            "$(grep -o 'detail=[a-z+-]*' /tmp/caret-on.log | tail -1)"
+    else
+        sed 's/^/      /' /tmp/caret-on.log
+        fail "a caret appearing stopped it recognising the prompt"
     fi
 
-    printf '  pointer over message: %s\n' \
-        "$(grep -o 'detect\.[a-z_]*' /tmp/cursor-run.log | tail -1)"
+    # The property that makes the above safe rather than merely lucky.
+    #
+    # Tolerating a caret must not become tolerating a different prompt. Note
+    # what "different" has to mean here: matching is a substring test, so
+    # extra text *after* the prompt still means the prompt is on screen and
+    # acting on it is correct. An earlier version of this check appended a
+    # clause and called that different wording, which it is not. The real
+    # risk is a character changed inside the prompt.
+    stop_console
+    start_vnc
+    show_message "" "Please press 'N' to continue."
+    before=$(keypress_count)
+    shim run -c /tmp/caret.conf --once > /tmp/caret-reworded.log 2>&1
+    sleep 2
+    [ "$(keypress_count)" = "$before" ] \
+        && ok "a prompt asking for a different key is still refused" \
+        || fail "caret tolerance also accepted a prompt asking for 'N'"
+
+    stop_console
+    start_vnc
+    show_message "" "Please press 'Y' to abort."
+    before=$(keypress_count)
+    shim run -c /tmp/caret.conf --once > /tmp/caret-abort.log 2>&1
+    sleep 2
+    [ "$(keypress_count)" = "$before" ] \
+        && ok "and a prompt meaning the opposite is refused" \
+        || fail "caret tolerance also accepted a prompt that aborts"
 
     stop_console
 }
@@ -1002,7 +1069,7 @@ stage_regressions() {
 
 # -- driver ------------------------------------------------------------
 
-ALL_STAGES="vectors handshake auth tls capture calibrate detect loop ring-buffer from-snapshot uncalibrated shared-console escalation concurrency ocr hostile-text service-linux regressions"
+ALL_STAGES="vectors handshake auth tls capture calibrate detect loop ring-buffer from-snapshot uncalibrated shared-console caret escalation concurrency ocr hostile-text service-linux regressions"
 
 run_stage() {
     case "$1" in
@@ -1017,6 +1084,7 @@ run_stage() {
         ring-buffer)    stage_ring_buffer ;;
         from-snapshot)  stage_from_snapshot ;;
         shared-console) stage_shared_console ;;
+        caret)          stage_caret ;;
         escalation)     stage_escalation ;;
         uncalibrated)   stage_uncalibrated ;;
         concurrency)    stage_concurrency ;;
