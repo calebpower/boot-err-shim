@@ -497,6 +497,61 @@ stage_loop() {
     stop_console
 }
 
+stage_from_snapshot() {
+    banner "from-snapshot: iterating on a calibration without a reboot"
+    start_vnc
+    show_message
+    write_config /tmp/snap.conf
+
+    # Calibrate over the wire, keeping the snapshot it saves.
+    shim configure -c /tmp/snap.conf > /tmp/overwire.log 2>&1
+    check $? "calibrated over the wire"
+    cp "$STATE/calibration.toml" /tmp/overwire.toml
+    cp "$STATE/snapshots/configure.png" /tmp/saved.png
+
+    # The documented recovery workflow: the console is gone, and the operator
+    # works from the snapshot instead.
+    stop_console
+
+    shim configure -c /tmp/snap.conf --from /tmp/saved.png > /tmp/fromfile.log 2>&1
+    check $? "calibrated again from the saved snapshot, with no server running"
+
+    grep -q "0 px differ" /tmp/fromfile.log \
+        && ok "the file-based calibration verified exactly" \
+        || fail "the file-based calibration did not verify"
+
+    cmp -s /tmp/overwire.toml "$STATE/calibration.toml" \
+        && ok "it produced a byte-identical calibration" \
+        || fail "the calibration differs depending on where the frame came from"
+
+    grep -q "connecting" /tmp/fromfile.log \
+        && fail "--from connected to the server anyway" \
+        || ok "--from did not touch the network"
+
+    # --dry-run must analyse without writing, so an operator can experiment
+    # against a live calibration without destroying it.
+    cp "$STATE/calibration.toml" /tmp/before.toml
+    shim configure -c /tmp/snap.conf --from /tmp/saved.png --dry-run \
+        > /tmp/dryrun.log 2>&1
+    check $? "--dry-run completed"
+    cmp -s /tmp/before.toml "$STATE/calibration.toml" \
+        && ok "--dry-run left the calibration untouched" \
+        || fail "--dry-run overwrote the calibration"
+
+    # A failed analysis must not destroy a good calibration either.
+    shim configure -c /tmp/snap.conf --from /tmp/saved.png --cell 5x5 \
+        > /tmp/badcell.log 2>&1 \
+        && fail "an impossible cell size was accepted" \
+        || ok "an impossible cell size was refused"
+    cmp -s /tmp/before.toml "$STATE/calibration.toml" \
+        && ok "a failed analysis left the previous calibration intact" \
+        || fail "a failed analysis destroyed the working calibration"
+
+    grep -q "What to try" /tmp/badcell.log \
+        && ok "the failure came with advice" \
+        || fail "the failure gave no next step"
+}
+
 stage_uncalibrated() {
     banner "uncalibrated: the daemon watches but refuses to act"
     start_vnc
@@ -797,7 +852,7 @@ stage_regressions() {
 
 # -- driver ------------------------------------------------------------
 
-ALL_STAGES="vectors handshake auth tls capture calibrate detect loop ring-buffer uncalibrated concurrency ocr hostile-text service-linux regressions"
+ALL_STAGES="vectors handshake auth tls capture calibrate detect loop ring-buffer from-snapshot uncalibrated concurrency ocr hostile-text service-linux regressions"
 
 run_stage() {
     case "$1" in
@@ -810,6 +865,7 @@ run_stage() {
         detect)         stage_detect ;;
         loop)           stage_loop ;;
         ring-buffer)    stage_ring_buffer ;;
+        from-snapshot)  stage_from_snapshot ;;
         uncalibrated)   stage_uncalibrated ;;
         concurrency)    stage_concurrency ;;
         ocr)            stage_ocr ;;
