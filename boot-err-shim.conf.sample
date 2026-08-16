@@ -31,6 +31,14 @@ tls             = false         # true if iDRAC "SSL Encryption" is enabled
 connect_timeout = 10
 read_timeout    = 30            # deadline for the whole framebuffer read
 
+# iDRAC ships a self-signed certificate, so verification is off by default --
+# otherwise tls = true would simply never connect. Unverified TLS still
+# defeats passive capture of the password, which is the realistic threat on a
+# management LAN, and the daemon logs a warning every time it skips the check.
+# If you have installed your own certificate, turn this on.
+# tls_verify = false
+# tls_ca     = "/usr/local/etc/idrac-ca.pem"
+
 [detect]
 # Exactly what should be on screen. Leading and trailing whitespace on each
 # line is ignored, and matching is case-insensitive, so this does not have to

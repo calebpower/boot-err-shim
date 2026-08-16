@@ -225,6 +225,8 @@ class VncConfig:
     port: int
     password: str | None
     tls: bool
+    tls_verify: bool
+    tls_ca: Path | None
     connect_timeout: int
     read_timeout: int
 
@@ -343,12 +345,18 @@ def parse_config(
         port=vnc_t.int_("port", 5901, 1, 65535),
         password=vnc_t.opt_str("password"),
         tls=vnc_t.bool_("tls", False),
+        tls_verify=vnc_t.bool_("tls_verify", False),
+        tls_ca=vnc_t.opt_path("tls_ca"),
         connect_timeout=vnc_t.duration("connect_timeout", 10),
         read_timeout=vnc_t.duration("read_timeout", 30),
     )
     vnc_t.finish()
     if not vnc.host.strip():
         raise ConfigError("vnc.host: must not be empty")
+    if (vnc.tls_verify or vnc.tls_ca is not None) and not vnc.tls:
+        # Otherwise the operator believes the connection is verified when it
+        # is not even encrypted.
+        raise ConfigError("vnc.tls_verify/vnc.tls_ca require vnc.tls = true")
 
     detect_t = root.table("detect")
     text = detect_t.str_("text")

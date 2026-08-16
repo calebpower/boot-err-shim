@@ -51,6 +51,12 @@ class Mutant:
     #: quietly counted as caught -- an untested assertion that looks tested is
     #: worse than one that admits it.
     platform: str | None = None
+    #: Test modules to run for this mutant. Empty means the whole suite.
+    #:
+    #: Purely a speed optimisation, and one with a trap: naming too narrow a
+    #: subset turns "no test covers this" into "the covering test was not
+    #: run", which looks identical. --full ignores this and is what CI uses.
+    suites: tuple[str, ...] = ()
 
 
 MUTANTS: list[Mutant] = [
@@ -64,6 +70,7 @@ MUTANTS: list[Mutant] = [
         tier="1 platform",
         rationale="FreeBSD -W is milliseconds; 2ms means every ping fails and "
         "a healthy host reads as down.",
+        suites=("tests.unit.test_platform",),
     ),
     Mutant(
         name="ping-units-linux",
@@ -75,6 +82,7 @@ MUTANTS: list[Mutant] = [
         tier="1 platform",
         rationale="iputils -W is seconds; 2000 means a ping that hangs for "
         "half an hour.",
+        suites=("tests.unit.test_platform",),
     ),
     Mutant(
         name="unknown-system-guesses-a-flag",
@@ -86,6 +94,7 @@ MUTANTS: list[Mutant] = [
         tier="1 platform",
         rationale="Guessing the units on an unknown OS reintroduces the exact "
         "footgun the fallback exists to avoid.",
+        suites=("tests.unit.test_platform",),
     ),
     Mutant(
         name="threshold-off-by-one",
@@ -94,6 +103,7 @@ MUTANTS: list[Mutant] = [
         new='threshold=ping_t.int_("threshold", 3, 0, 1000),',
         tier="1 config",
         rationale="A threshold of 0 means acting before a single failed ping.",
+        suites=("tests.unit.test_config",),
     ),
     Mutant(
         name="unknown-keys-ignored",
@@ -103,6 +113,7 @@ MUTANTS: list[Mutant] = [
         tier="1 config + 3 structural",
         rationale="A typo silently ignored is a setting the operator believes "
         "is in force but is not.",
+        suites=("tests.unit.test_config", "tests.structural.test_config_sample",),
     ),
     Mutant(
         name="password-permission-check-dropped",
@@ -112,6 +123,7 @@ MUTANTS: list[Mutant] = [
         tier="1 config",
         rationale="A world-readable config hands console access to any local "
         "user.",
+        suites=("tests.unit.test_config",),
     ),
     Mutant(
         name="ping-command-placeholder-unchecked",
@@ -121,6 +133,7 @@ MUTANTS: list[Mutant] = [
         tier="1 config",
         rationale="A command with no {host} pings nothing and reports every "
         "host as up forever.",
+        suites=("tests.unit.test_config",),
     ),
     Mutant(
         name="probe-timeout-reads-as-up",
@@ -129,6 +142,7 @@ MUTANTS: list[Mutant] = [
         new='return ProbeResult(up=True, reason="timeout")',
         tier="1 probe",
         rationale="A hung ping would mask a genuinely dead host indefinitely.",
+        suites=("tests.unit.test_probe",),
     ),
     Mutant(
         name="probe-nonzero-exit-reads-as-up",
@@ -137,6 +151,7 @@ MUTANTS: list[Mutant] = [
         new='return ProbeResult(up=True, reason="unreachable", output=output)',
         tier="1 probe",
         rationale="Inverting the core signal the whole daemon is built on.",
+        suites=("tests.unit.test_probe",),
     ),
     Mutant(
         name="atomic-write-leaves-temp-files",
@@ -147,6 +162,7 @@ MUTANTS: list[Mutant] = [
         tier="1 lock",
         rationale="Repeated failed writes would fill the state directory with "
         "debris.",
+        suites=("tests.unit.test_lock",),
     ),
     Mutant(
         name="atomic-write-becomes-truncating-write",
@@ -156,6 +172,7 @@ MUTANTS: list[Mutant] = [
         tier="1 lock",
         rationale="A signal mid-write then leaves a truncated calibration, and "
         "the daemon refuses to press keys on next start.",
+        suites=("tests.unit.test_lock",),
     ),
     Mutant(
         name="lock-allows-two-holders-posix",
@@ -166,6 +183,7 @@ MUTANTS: list[Mutant] = [
         rationale="Two daemons on one iDRAC can each press 'Y' -- the worst "
         "thing this program can do.",
         platform="posix",
+        suites=("tests.unit.test_lock",),
     ),
     Mutant(
         name="lock-allows-two-holders-windows",
@@ -177,6 +195,7 @@ MUTANTS: list[Mutant] = [
         rationale="Same invariant as the posix mutant, on the branch this "
         "development machine actually executes.",
         platform="nt",
+        suites=("tests.unit.test_lock",),
     ),
     # -- step 2: the state machine ------------------------------------
     Mutant(
@@ -188,6 +207,7 @@ MUTANTS: list[Mutant] = [
         rationale="Pressing because the host stopped answering pings, rather "
         "than because the prompt is on screen. The single worst defect "
         "this program could have.",
+        suites=("tests.contract.test_safety_matrix", "tests.contract.test_daemon_loop",),
     ),
     Mutant(
         name="press-without-a-calibration",
@@ -197,6 +217,7 @@ MUTANTS: list[Mutant] = [
         tier="4 safety matrix",
         rationale="Acting on an uncalibrated guess is exactly the guesswork "
         "the calibration design exists to avoid.",
+        suites=("tests.contract.test_safety_matrix", "tests.contract.test_daemon_loop",),
     ),
     Mutant(
         name="no-act-still-presses",
@@ -206,6 +227,7 @@ MUTANTS: list[Mutant] = [
         tier="4 safety matrix",
         rationale="An operator who asked to observe only would get a "
         "keystroke sent to a live console.",
+        suites=("tests.contract.test_safety_matrix", "tests.contract.test_daemon_loop",),
     ),
     Mutant(
         name="threshold-comparison-off-by-one",
@@ -214,6 +236,7 @@ MUTANTS: list[Mutant] = [
         new="    if failures <= threshold:",
         tier="4 decision matrix",
         rationale="Acts one cycle later than configured, every time.",
+        suites=("tests.contract.test_decision_matrix",),
     ),
     Mutant(
         name="intervals-swapped",
@@ -222,6 +245,7 @@ MUTANTS: list[Mutant] = [
         new="            sleep_for=retry_interval,\n            reason=\"host.up\",",
         tier="4 decision matrix",
         rationale="Hammers a healthy host and dawdles over a failing one.",
+        suites=("tests.contract.test_decision_matrix",),
     ),
     Mutant(
         name="refusal-resets-the-failure-counter",
@@ -232,6 +256,7 @@ MUTANTS: list[Mutant] = [
         tier="4 daemon loop",
         rationale="Drops the daemon out of recovery back to routine polling "
         "while the host is still stuck at the prompt.",
+        suites=("tests.contract.test_safety_matrix", "tests.contract.test_daemon_loop",),
     ),
     Mutant(
         name="frame-not-written-on-no-match",
@@ -241,6 +266,7 @@ MUTANTS: list[Mutant] = [
         tier="4 daemon loop",
         rationale="A false negative becomes undiagnosable: the log says 'not "
         "found' and there is no frame to explain why.",
+        suites=("tests.contract.test_daemon_loop",),
     ),
     Mutant(
         name="capture-failure-falls-through-to-no-match",
@@ -252,6 +278,7 @@ MUTANTS: list[Mutant] = [
         tier="4 daemon loop",
         rationale="Reports a claim about screen contents we never actually "
         "saw.",
+        suites=("tests.contract.test_daemon_loop",),
     ),
     Mutant(
         name="console-not-closed",
@@ -260,6 +287,7 @@ MUTANTS: list[Mutant] = [
         new="        if False:\n            try:\n                console.close()",
         tier="4 daemon loop",
         rationale="Leaks a VNC session per cycle; iDRAC allows very few.",
+        suites=("tests.contract.test_daemon_loop",),
     ),
     Mutant(
         name="history-not-persisted",
@@ -269,6 +297,7 @@ MUTANTS: list[Mutant] = [
         tier="1 history + 4 daemon loop",
         rationale="A restart resets the count, hiding exactly the repeated "
         "failure pattern worth escalating.",
+        suites=("tests.unit.test_history", "tests.contract.test_daemon_loop",),
     ),
     Mutant(
         name="damaged-history-crashes-the-daemon",
@@ -278,6 +307,7 @@ MUTANTS: list[Mutant] = [
         tier="1 history",
         rationale="A truncated JSON file would stop the daemon rescuing the "
         "host -- an outage caused by diagnostics.",
+        suites=("tests.unit.test_history",),
     ),
     Mutant(
         name="frame-accepts-short-buffers",
@@ -287,6 +317,142 @@ MUTANTS: list[Mutant] = [
         tier="1 frame",
         rationale="A truncated FramebufferUpdate would surface as an "
         "IndexError deep in glyph matching instead of at the boundary.",
+        suites=("tests.unit.test_frame",),
+    ),
+    # -- step 3: DES, PNG, RFB ----------------------------------------
+    Mutant(
+        name="des-key-schedule-rotation",
+        path="src/boot_err_shim/des.py",
+        old="_SHIFTS = (1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1)",
+        new="_SHIFTS = (1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1)",
+        tier="1 des",
+        rationale="One wrong rotation in the key schedule. Round-trip tests "
+        "would not notice; the published vectors do.",
+        suites=("tests.unit.test_des",),
+    ),
+    Mutant(
+        name="des-vnc-bit-reversal-dropped",
+        path="src/boot_err_shim/des.py",
+        old="    return bytes(_reverse_bits(byte) for byte in padded)",
+        new="    return padded",
+        tier="1 des + 5 fake server",
+        rationale="Authentication then fails against every real VNC server "
+        "while our own round-trip tests stay green.",
+        suites=("tests.unit.test_des", "tests.fake.test_rfb_client",),
+    ),
+    Mutant(
+        name="png-paeth-predictor",
+        path="src/boot_err_shim/png.py",
+        old="    if pb <= pc:\n        return b\n    return c",
+        new="    if pb <= pc:\n        return c\n    return b",
+        tier="1 png",
+        rationale="Silently corrupts any PNG another tool wrote with filter "
+        "type 4, which is the common default.",
+        suites=("tests.unit.test_png",),
+    ),
+    Mutant(
+        name="png-crc-not-checked",
+        path="src/boot_err_shim/png.py",
+        old="        if declared != actual:",
+        new="        if False:",
+        tier="1 png",
+        rationale="A corrupt snapshot would decode to garbage and be analysed "
+        "as though it were real.",
+        suites=("tests.unit.test_png",),
+    ),
+    Mutant(
+        name="png-interlaced-accepted",
+        path="src/boot_err_shim/png.py",
+        old="    if interlace != 0:",
+        new="    if False:",
+        tier="1 png",
+        rationale="An Adam7 image would decode to a scrambled frame that then "
+        "fails to calibrate for reasons nobody can diagnose.",
+        suites=("tests.unit.test_png",),
+    ),
+    Mutant(
+        name="rfb-no-read-deadline",
+        path="src/boot_err_shim/rfb.py",
+        old="            self.sock.settimeout(deadline.check(what))",
+        new="            self.sock.settimeout(30)",
+        tier="5 fake server",
+        rationale="A per-recv timeout resets on every byte, so a dribbling "
+        "iDRAC holds the daemon forever. The exact wedge this design "
+        "exists to prevent.",
+        suites=("tests.fake.test_rfb_client",),
+    ),
+    Mutant(
+        name="rfb-red-and-blue-swapped",
+        path="src/boot_err_shim/rfb.py",
+        old="            pixels[t] = data[s + 2]  # red\n"
+        "            pixels[t + 1] = data[s + 1]  # green\n"
+        "            pixels[t + 2] = data[s]  # blue",
+        new="            pixels[t] = data[s]  # red\n"
+        "            pixels[t + 1] = data[s + 1]  # green\n"
+        "            pixels[t + 2] = data[s + 2]  # blue",
+        tier="5 fake server",
+        rationale="Invisible on a greyscale console and wrong everywhere "
+        "else, including any colour-based calibration.",
+        suites=("tests.fake.test_rfb_client",),
+    ),
+    Mutant(
+        name="rfb-key-release-not-sent",
+        path="src/boot_err_shim/rfb.py",
+        old="        events = (True, False) if pressed is None else (pressed,)",
+        new="        events = (True,) if pressed is None else (pressed,)",
+        tier="5 fake server",
+        rationale="A key held down forever at a firmware prompt; some "
+        "firmware ignores a press with no release.",
+        suites=("tests.fake.test_rfb_client",),
+    ),
+    Mutant(
+        name="rfb-empty-update-becomes-a-black-screen",
+        path="src/boot_err_shim/rfb.py",
+        old='            raise ProtocolError("server sent an update containing no rectangles")',
+        new="            pass",
+        tier="5 fake server",
+        rationale="Far worse than failing: the detector finds no match on an "
+        "all-zero frame and the daemon concludes the prompt is absent.",
+        suites=("tests.fake.test_rfb_client",),
+    ),
+    Mutant(
+        name="rfb-rectangle-bounds-unchecked",
+        path="src/boot_err_shim/rfb.py",
+        old="            if x + w > width or y + h > height:",
+        new="            if False:",
+        tier="5 fake server",
+        rationale="A rectangle past the edge writes outside the frame buffer "
+        "we allocated.",
+        suites=("tests.fake.test_rfb_client",),
+    ),
+    Mutant(
+        name="rfb-absurd-rectangle-count-unchecked",
+        path="src/boot_err_shim/rfb.py",
+        old="        if count > MAX_RECTANGLES:",
+        new="        if False:",
+        tier="5 fake server",
+        rationale="A corrupt count would have us loop sixty thousand times "
+        "waiting on a peer that has nothing left to say.",
+        suites=("tests.fake.test_rfb_client",),
+    ),
+    Mutant(
+        name="rfb-desktop-name-length-unchecked",
+        path="src/boot_err_shim/rfb.py",
+        old="        if name_length > 8192:",
+        new="        if False:",
+        tier="5 fake server",
+        rationale="A four-gigabyte name length would be read as a length.",
+        suites=("tests.fake.test_rfb_client",),
+    ),
+    Mutant(
+        name="rfb-accepts-old-protocol-versions",
+        path="src/boot_err_shim/rfb.py",
+        old="        if (major, minor) < (3, 8):",
+        new="        if False:",
+        tier="5 fake server",
+        rationale="RFB 3.3 has a different security handshake; proceeding "
+        "would desynchronise the stream rather than fail cleanly.",
+        suites=("tests.fake.test_rfb_client",),
     ),
     Mutant(
         name="log-newline-not-escaped",
@@ -296,6 +462,7 @@ MUTANTS: list[Mutant] = [
         tier="1 log",
         rationale="A multi-line ping error splits one event across lines and "
         "desyncs anything parsing the log.",
+        suites=("tests.unit.test_log",),
     ),
     Mutant(
         name="log-handlers-accumulate-on-reload",
@@ -306,14 +473,20 @@ MUTANTS: list[Mutant] = [
         new="    pass",
         tier="1 log",
         rationale="Every SIGHUP would duplicate every subsequent log line.",
+        suites=("tests.unit.test_log",),
     ),
 ]
 
 
-def run_suite() -> tuple[bool, str]:
-    """Run the suite. Returns (passed, output tail)."""
+def run_suite(suites: tuple[str, ...] = ()) -> tuple[bool, str]:
+    """Run the suite, or just the named modules. Returns (passed, output)."""
+    if suites:
+        command = [sys.executable, "-m", "unittest", *suites]
+    else:
+        command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+
     completed = subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "."],
+        command,
         cwd=REPO,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -349,6 +522,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--list", action="store_true", help="list mutants and exit")
     parser.add_argument("-k", metavar="SUBSTRING", help="only mutants matching this")
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="run the whole suite per mutant, ignoring per-mutant suite hints",
+    )
     args = parser.parse_args()
 
     matched = [m for m in MUTANTS if not args.k or args.k in m.name]
@@ -383,7 +561,12 @@ def main() -> int:
         print(f"[{index}/{len(selected)}] {mutant.name} ... ", end="", flush=True)
         original = apply_mutant(mutant)
         try:
-            passed, output = run_suite()
+            passed, output = run_suite(() if args.full else mutant.suites)
+            if passed and mutant.suites and not args.full:
+                # A narrow subset missing it proves nothing on its own -- the
+                # covering test may simply not have run. Confirm against the
+                # whole suite before calling it a survivor.
+                passed, output = run_suite()
         finally:
             (REPO / mutant.path).write_text(original, encoding="utf-8")
 
