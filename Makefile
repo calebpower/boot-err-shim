@@ -86,8 +86,14 @@ install-freebsd: install-common
 	install -m 0755 init/rc.d/boot_err_shim \
 		$(DESTDIR)$(PREFIX)/etc/rc.d/boot_err_shim
 	install -d -m 0750 $(DESTDIR)/var/db/boot-err-shim
+	@# Re-assert ownership, because the line above runs against an existing
+	@# directory on every update and install(1) may reset it to root -- which
+	@# would leave the daemon unable to write its calibration or lock file.
+	@# Prefixed with - so a first install, or a staged build where the account
+	@# does not exist, is not a failure.
+	-chown -R $(SERVICE_USER) $(DESTDIR)/var/db/boot-err-shim
 	@echo
-	@echo 'Installed. Next:'
+	@echo 'Installed. Next (or on an update, only if start complains):'
 	@echo '  # 1. the service user, first: everything below refers to it'
 	@echo '  pw useradd $(SERVICE_USER) -d /nonexistent -s /usr/sbin/nologin || true'
 	@echo '  chown -R $(SERVICE_USER) /var/db/boot-err-shim'

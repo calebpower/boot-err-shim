@@ -80,6 +80,26 @@ names whichever one is wrong. On Linux none of this applies: the systemd unit
 uses `DynamicUser` and `LoadCredential`, so there is no account to create and
 the config stays root-owned `0600`.
 
+### Updating an existing install
+
+```sh
+git pull
+service boot_err_shim stop        # only if it is running
+make install-freebsd              # or install-linux
+service boot_err_shim start
+```
+
+`make install-*` is safe to re-run. It replaces the binary, the rc script or
+unit, and the `.conf.sample`. It does **not** touch your `boot-err-shim.conf`,
+your calibration, the intervention history or the snapshot ring buffer, and it
+re-asserts ownership of the state directory in case `install(1)` reset it.
+
+**Your calibration survives an update.** The format is versioned and unchanged,
+which matters because re-running `configure` needs the host to be sitting at
+the error again -- not something you can arrange on demand. If a future release
+does change the format, the daemon says so by name and refuses to act rather
+than misreading it.
+
 ### Linux (Ubuntu 26.04 and similar)
 
 ```sh
