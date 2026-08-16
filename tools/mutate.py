@@ -178,6 +178,116 @@ MUTANTS: list[Mutant] = [
         "development machine actually executes.",
         platform="nt",
     ),
+    # -- step 2: the state machine ------------------------------------
+    Mutant(
+        name="press-without-a-match",
+        path="src/boot_err_shim/daemon.py",
+        old="    return connected and matched and calibrated and not no_act",
+        new="    return connected and calibrated and not no_act",
+        tier="4 safety matrix",
+        rationale="Pressing because the host stopped answering pings, rather "
+        "than because the prompt is on screen. The single worst defect "
+        "this program could have.",
+    ),
+    Mutant(
+        name="press-without-a-calibration",
+        path="src/boot_err_shim/daemon.py",
+        old="    return connected and matched and calibrated and not no_act",
+        new="    return connected and matched and not no_act",
+        tier="4 safety matrix",
+        rationale="Acting on an uncalibrated guess is exactly the guesswork "
+        "the calibration design exists to avoid.",
+    ),
+    Mutant(
+        name="no-act-still-presses",
+        path="src/boot_err_shim/daemon.py",
+        old="    return connected and matched and calibrated and not no_act",
+        new="    return connected and matched and calibrated",
+        tier="4 safety matrix",
+        rationale="An operator who asked to observe only would get a "
+        "keystroke sent to a live console.",
+    ),
+    Mutant(
+        name="threshold-comparison-off-by-one",
+        path="src/boot_err_shim/daemon.py",
+        old="    if failures < threshold:",
+        new="    if failures <= threshold:",
+        tier="4 decision matrix",
+        rationale="Acts one cycle later than configured, every time.",
+    ),
+    Mutant(
+        name="intervals-swapped",
+        path="src/boot_err_shim/daemon.py",
+        old="            sleep_for=ping_interval,\n            reason=\"host.up\",",
+        new="            sleep_for=retry_interval,\n            reason=\"host.up\",",
+        tier="4 decision matrix",
+        rationale="Hammers a healthy host and dawdles over a failing one.",
+    ),
+    Mutant(
+        name="refusal-resets-the-failure-counter",
+        path="src/boot_err_shim/daemon.py",
+        old='            action=Action.SLEEP, sleep_for=recovery_interval, reason="no.match"',
+        new='            action=Action.SLEEP, sleep_for=recovery_interval, reason="no.match",\n'
+        "            reset_failures=True",
+        tier="4 daemon loop",
+        rationale="Drops the daemon out of recovery back to routine polling "
+        "while the host is still stuck at the prompt.",
+    ),
+    Mutant(
+        name="frame-not-written-on-no-match",
+        path="src/boot_err_shim/daemon.py",
+        old="        if frame is not None and self.frame_writer is not None:",
+        new="        if matched and frame is not None and self.frame_writer is not None:",
+        tier="4 daemon loop",
+        rationale="A false negative becomes undiagnosable: the log says 'not "
+        "found' and there is no frame to explain why.",
+    ),
+    Mutant(
+        name="capture-failure-falls-through-to-no-match",
+        path="src/boot_err_shim/daemon.py",
+        old="                connected = False\n                event(\n                    log,\n"
+        '                    logging.WARNING,\n                    "vnc.capture_failed",',
+        new="                connected = True\n                event(\n                    log,\n"
+        '                    logging.WARNING,\n                    "vnc.capture_failed",',
+        tier="4 daemon loop",
+        rationale="Reports a claim about screen contents we never actually "
+        "saw.",
+    ),
+    Mutant(
+        name="console-not-closed",
+        path="src/boot_err_shim/daemon.py",
+        old="        if console is not None:\n            try:\n                console.close()",
+        new="        if False:\n            try:\n                console.close()",
+        tier="4 daemon loop",
+        rationale="Leaks a VNC session per cycle; iDRAC allows very few.",
+    ),
+    Mutant(
+        name="history-not-persisted",
+        path="src/boot_err_shim/history.py",
+        old="        self.prune(when)\n        self.save()",
+        new="        self.prune(when)",
+        tier="1 history + 4 daemon loop",
+        rationale="A restart resets the count, hiding exactly the repeated "
+        "failure pattern worth escalating.",
+    ),
+    Mutant(
+        name="damaged-history-crashes-the-daemon",
+        path="src/boot_err_shim/history.py",
+        old="        except (ValueError, TypeError, KeyError):\n            return cls(path=path, timestamps=[])",
+        new="        except (ValueError, TypeError, KeyError):\n            raise",
+        tier="1 history",
+        rationale="A truncated JSON file would stop the daemon rescuing the "
+        "host -- an outage caused by diagnostics.",
+    ),
+    Mutant(
+        name="frame-accepts-short-buffers",
+        path="src/boot_err_shim/frame.py",
+        old="        if len(self.data) != expected:",
+        new="        if False:",
+        tier="1 frame",
+        rationale="A truncated FramebufferUpdate would surface as an "
+        "IndexError deep in glyph matching instead of at the boundary.",
+    ),
     Mutant(
         name="log-newline-not-escaped",
         path="src/boot_err_shim/log.py",
