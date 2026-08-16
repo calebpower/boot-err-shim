@@ -987,6 +987,45 @@ stage_service_linux() {
         fail "the bundle does not run"
     fi
 
+    # The same target, built by bmake.
+    #
+    # FreeBSD's `make` IS bmake, and the install targets are meant to be run
+    # there. Written against GNU make they were not merely non-portable, they
+    # failed silently: $(shell ...) is not a function in bmake but an
+    # undefined variable, so the interpreter expanded to nothing, zipapp
+    # wrote no shebang, and the daemon failed at boot complaining about an
+    # interpreter made of ZIP header bytes. GNU make alone cannot catch that.
+    if command -v bmake > /dev/null 2>&1; then
+        rm -f "$WORK/boot-err-shim.pyz"
+        if (cd "$WORK" && bmake bundle) > /tmp/bmake.log 2>&1; then
+            ok "bmake builds the bundle: $(tail -1 /tmp/bmake.log)"
+        else
+            tail -6 /tmp/bmake.log | sed 's/^/      /'
+            fail "bmake cannot build the bundle (FreeBSD would hit this)"
+        fi
+
+        bshebang=$(head -1 "$WORK/boot-err-shim.pyz" 2>/dev/null)
+        case "$bshebang" in
+            '#!/'*) ok "the bmake bundle has an absolute shebang" ;;
+            '#!'*)  fail "the bmake bundle has a relative shebang: $bshebang" ;;
+            *)      fail "the bmake bundle has no shebang at all" ;;
+        esac
+
+        # And the build must refuse rather than emit something unrunnable.
+        rm -f "$WORK/boot-err-shim.pyz"
+        if (cd "$WORK" && bmake bundle INTERPRETER=notabsolute) \
+                > /tmp/bmake-bad.log 2>&1; then
+            fail "a relative INTERPRETER was accepted"
+        else
+            ok "a relative INTERPRETER is refused at build time"
+        fi
+
+        rm -f "$WORK/boot-err-shim.pyz"
+        make -C "$WORK" bundle > /dev/null 2>&1
+    else
+        skip "building with bmake" "bmake is not installed in this image"
+    fi
+
     # The shebang has to be an absolute interpreter, not `env python3`.
     # Under rc(8) and cron the PATH is /sbin:/bin:/usr/sbin:/usr/bin, and on
     # FreeBSD python3 lives in /usr/local/bin, so an env shebang starts fine

@@ -84,7 +84,22 @@ boot_err_shim_precmd()
 	# program, the interpreter or the reason -- and it only happens under
 	# rc(8), so it looks like the service is broken when the very same
 	# command works by hand.
-	_shebang=$(head -1 "${shim}" 2>/dev/null | sed 's/^#!//')
+	_firstline=$(head -1 "${shim}" 2>/dev/null)
+	case "${_firstline}" in
+	'#!'*)
+		;;
+	*)
+		# No shebang at all. The bundle was built by a make that silently
+		# expanded the interpreter to nothing, and what follows is ZIP
+		# header bytes -- reporting those as "the interpreter" is how this
+		# check first read the situation, which helped nobody.
+		err 1 "${shim} has no #! line, so it cannot be executed at all." \
+		    "The bundle was built with a broken toolchain. Rebuild on this" \
+		    "host with: make install-freebsd"
+		;;
+	esac
+
+	_shebang=${_firstline#\#!}
 	_interp=${_shebang%% *}
 	if [ "${_interp}" = "/usr/bin/env" ]; then
 		_wanted=${_shebang#* }

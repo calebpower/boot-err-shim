@@ -17,11 +17,17 @@ PYTHON      ?= python3
 # /usr/local/bin/python3 symlink instead of a versioned binary that a minor
 # upgrade would move out from under us.
 #
-# Override when cross-installing -- building on Linux for a FreeBSD target
-# needs INTERPRETER=/usr/local/bin/python3.
-INTERPRETER ?= $(shell command -v $(PYTHON) 2>/dev/null || \
-                 $(PYTHON) -c 'import sys; print(sys.executable)' 2>/dev/null || \
-                 echo /usr/bin/env $(PYTHON))
+# Empty means "work it out at build time". Override when cross-installing:
+# building on Linux for a FreeBSD target needs
+# INTERPRETER=/usr/local/bin/python3.
+#
+# Resolved inside the recipe rather than with $(shell ...). FreeBSD's make is
+# bmake, where $(shell ...) is not a function but an undefined variable, so it
+# expanded to nothing and `zipapp -p ''` wrote a bundle with no shebang at
+# all -- which then failed at run time complaining about an interpreter made
+# of ZIP header bytes. Recipes are shell in both makes; make functions are
+# not portable between them.
+INTERPRETER ?=
 
 IMAGE       ?= boot-err-shim-e2e
 STAGES      ?= all
@@ -65,7 +71,7 @@ test-e2e-build:
 # to the working tree even by accident.
 .PHONY: test-e2e
 test-e2e: test-e2e-build
-	podman run --rm -v "$(CURDIR):/src:ro" $(IMAGE) $(STAGES)
+	podman run --rm -v "$$(pwd):/src:ro" $(IMAGE) $(STAGES)
 
 .PHONY: lint
 lint:
@@ -83,11 +89,32 @@ bundle:
 	cp -r src/boot_err_shim build/pyz/
 	printf 'from boot_err_shim.cli import main\nraise SystemExit(main())\n' \
 		> build/pyz/__main__.py
-	$(PYTHON) -m zipapp build/pyz \
-		-o boot-err-shim.pyz \
-		-p '$(INTERPRETER)' \
-		-c
-	@echo "wrote boot-err-shim.pyz (interpreter: $(INTERPRETER))"
+	@interp='$(INTERPRETER)'; \
+	explicit=yes; \
+	if [ -z "$$interp" ]; then \
+		explicit=no; \
+		interp=$$(command -v $(PYTHON) 2>/dev/null || true); \
+	fi; \
+	if [ -z "$$interp" ]; then \
+		echo "cannot resolve $(PYTHON) to a path; pass INTERPRETER=/usr/local/bin/python3" >&2; \
+		exit 1; \
+	fi; \
+	case "$$interp" in /*) ;; *) \
+		echo "INTERPRETER must be an absolute path, got '$$interp'" >&2; \
+		echo "an env shebang fails under rc(8) and cron, which is the whole point" >&2; \
+		exit 1 ;; \
+	esac; \
+	if [ "$$explicit" = no ] && [ ! -x "$$interp" ]; then \
+		echo "$$interp is not executable" >&2; exit 1; \
+	fi; \
+	$(PYTHON) -m zipapp build/pyz -o boot-err-shim.pyz -p "$$interp" -c; \
+	case "$$(head -1 boot-err-shim.pyz)" in \
+	'#!'*) ;; \
+	*) echo "the bundle came out with no shebang -- refusing to ship it" >&2; \
+	   echo "(this is what a make without \$$(shell) support produces)" >&2; \
+	   rm -f boot-err-shim.pyz; exit 1 ;; \
+	esac; \
+	echo "wrote boot-err-shim.pyz (interpreter: $$interp)"
 
 # -- installation ------------------------------------------------------
 

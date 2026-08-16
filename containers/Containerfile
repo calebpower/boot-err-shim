@@ -30,6 +30,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         openssl \
         systemd \
         make \
+        bmake \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
