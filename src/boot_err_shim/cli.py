@@ -466,30 +466,73 @@ def _install_signal_handlers(stop, threading_module) -> None:
 
 
 def _write_ring(config: Config, frame: Frame, label: str) -> Path:
-    """Write a frame into the snapshot ring buffer, evicting the oldest."""
+    """Write a frame into the snapshot ring buffer, evicting the oldest.
+
+    Names are microsecond timestamps -- ``20260816T124820.031457-match.png``
+    -- so a directory listing reads chronologically for a person. Two frames
+    landing in the same microsecond get the next free one.
+
+    **Eviction orders by modification time, not by name**, and that
+    distinction was arrived at the hard way. A first version put a counter
+    after the seconds (``...124820-1-match.png``), which sorts *before*
+    ``...124820-match.png`` because '1' precedes 'm', so eviction deleted the
+    newest frame. Moving the counter into the prefix fixed the comparison but
+    not the scheme: once eviction frees an index, the next write claims it
+    again, and names cycle instead of increasing. Any naming scheme derived
+    from a clock has this problem somewhere, a backwards NTP step being the
+    obvious one. The filesystem already records when each file was written,
+    so ask it.
+    """
+    import time
+
     directory = config.log.screenshot_dir
     directory.mkdir(parents=True, exist_ok=True)
 
-    import time
+    def named(at: float) -> Path:
+        stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime(at))
+        return directory / f"{stamp}.{int(round((at % 1) * 1_000_000)):06d}-{label}.png"
 
-    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
-    path = directory / f"{stamp}-{label}.png"
-    # A second capture inside the same second must not clobber the first.
-    suffix = 1
-    while path.exists():
-        path = directory / f"{stamp}-{suffix}-{label}.png"
-        suffix += 1
+    now = time.time()
+    path = named(now)
+    # Bounded. Nudging the timestamp only finds a free name while the name
+    # actually depends on it; if that ever stops being true the loop cannot
+    # terminate, and a daemon spinning silently is far worse than one that
+    # overwrites a single snapshot.
+    for _ in range(1000):
+        if not path.exists():
+            break
+        now += 0.000001
+        path = named(now)
 
     write_frame(path, frame)
 
+    def age(candidate: Path) -> tuple[int, str]:
+        # Name breaks ties on filesystems whose timestamps are coarse.
+        try:
+            return candidate.stat().st_mtime_ns, candidate.name
+        except OSError:  # pragma: no cover - vanished under us; treat as old
+            return 0, candidate.name
+
     existing = sorted(
-        (p for p in directory.glob("*.png") if p.name != "configure.png"),
-        key=lambda p: p.name,
+        (
+            candidate
+            for candidate in directory.glob("*.png")
+            # configure.png is referred to by name by `configure --from`, and
+            # the frame we just wrote is never a candidate for eviction
+            # whatever the ordering says.
+            if candidate.name != "configure.png" and candidate != path
+        ),
+        key=age,
     )
-    for stale in existing[: max(0, len(existing) - config.log.screenshot_keep)]:
+
+    # Budget counts the new frame, so keep-1 of the older ones survive.
+    surplus = max(0, len(existing) - (config.log.screenshot_keep - 1))
+    for stale in existing[:surplus]:
         try:
             stale.unlink()
         except OSError:
+            # Losing a snapshot is a nuisance; failing the cycle over one
+            # would cost the rescue.
             pass
     return path
 
@@ -504,7 +547,30 @@ COMMANDS = {
 }
 
 
+def _make_output_lossy() -> None:
+    """Never let printing be the thing that fails.
+
+    Daemons run under LANG=C, where stdout encodes as ASCII. The decoded
+    screen text can contain U+FFFD, because that is what an unknown glyph
+    becomes, and printing it raised UnicodeEncodeError -- so `test-detect` on
+    a non-matching screen died with a traceback instead of reporting NO MATCH.
+
+    Escaping rather than substituting keeps the output honest: on a UTF-8
+    terminal the character appears as itself, and on an ASCII one it appears
+    as an escape rather than being silently replaced by something that might
+    also be real text on the console.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="backslashreplace")
+            except (ValueError, OSError):  # pragma: no cover - exotic streams
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _make_output_lossy()
     parser = build_parser()
     args = parser.parse_args(argv)
 

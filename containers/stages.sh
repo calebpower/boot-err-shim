@@ -497,6 +497,59 @@ stage_loop() {
     stop_console
 }
 
+stage_ring_buffer() {
+    banner "ring-buffer: snapshots stay bounded over many cycles"
+    start_vnc
+    show_other_screen          # no match, so every cycle writes and none acts
+    write_config /tmp/ring.conf "screenshot_keep = 3"
+
+    # Calibrate against the real error screen first, then point the console
+    # at something else so the daemon keeps capturing without ever pressing.
+    stop_console
+    start_vnc
+    show_message
+    shim configure -c /tmp/ring.conf > /dev/null 2>&1
+    check $? "calibrated"
+    stop_console
+
+    start_vnc
+    show_other_screen
+
+    for _ in 1 2 3 4 5 6 7 8; do
+        shim run -c /tmp/ring.conf --once > /dev/null 2>&1
+    done
+
+    count=$(find "$STATE/snapshots" -name '*.png' ! -name 'configure.png' \
+        | wc -l | tr -d ' ')
+    total=$(find "$STATE/snapshots" -name '*.png' | wc -l | tr -d ' ')
+
+    [ "$count" = "3" ] \
+        && ok "eight cycles left exactly 3 rotated snapshots" \
+        || fail "expected 3 rotated snapshots, found $count"
+
+    [ -f "$STATE/snapshots/configure.png" ] \
+        && ok "the configure snapshot survived rotation" \
+        || fail "the configure snapshot was rotated away"
+
+    [ "$total" = "4" ] \
+        && ok "4 files total, configure.png plus the ring" \
+        || fail "expected 4 files, found $total"
+
+    # The frames must be readable, since the documented way to diagnose a
+    # false negative is to feed one back through configure --from.
+    newest=$(find "$STATE/snapshots" -name '*.png' ! -name 'configure.png' \
+        | sort | tail -1)
+    shim test-detect -c /tmp/ring.conf "$newest" > /tmp/ring-detect.log 2>&1
+    if grep -q "NO MATCH" /tmp/ring-detect.log; then
+        ok "a rotated frame reads back and correctly does not match"
+    else
+        sed 's/^/      /' /tmp/ring-detect.log
+        fail "a rotated frame did not read back as expected"
+    fi
+
+    stop_console
+}
+
 stage_concurrency() {
     banner "concurrency: two daemons, one real console"
     start_vnc
@@ -696,7 +749,7 @@ stage_regressions() {
 
 # -- driver ------------------------------------------------------------
 
-ALL_STAGES="vectors handshake auth tls capture calibrate detect loop concurrency ocr hostile-text service-linux regressions"
+ALL_STAGES="vectors handshake auth tls capture calibrate detect loop ring-buffer concurrency ocr hostile-text service-linux regressions"
 
 run_stage() {
     case "$1" in
@@ -708,6 +761,7 @@ run_stage() {
         calibrate)      stage_calibrate ;;
         detect)         stage_detect ;;
         loop)           stage_loop ;;
+        ring-buffer)    stage_ring_buffer ;;
         concurrency)    stage_concurrency ;;
         ocr)            stage_ocr ;;
         hostile-text)   stage_hostile_text ;;

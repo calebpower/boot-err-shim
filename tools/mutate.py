@@ -629,6 +629,62 @@ MUTANTS: list[Mutant] = [
             "tests.contract.test_daemon_loop",
         ),
     ),
+    # -- found by the CLI and ring-buffer tests ------------------------
+    Mutant(
+        name="ring-buffer-evicts-the-frame-just-written",
+        path="src/boot_err_shim/cli.py",
+        old="            if candidate.name != \"configure.png\" and candidate != path",
+        new="            if candidate.name != \"configure.png\"",
+        tier="1 cli + 6 ring-buffer",
+        rationale="Two frames captured in the same second sorted the newer "
+        "one first, so eviction deleted the frame just captured -- the "
+        "most interesting one in the directory.",
+        suites=("tests.unit.test_cli",),
+    ),
+    Mutant(
+        name="eviction-orders-by-name-not-by-time",
+        path="src/boot_err_shim/cli.py",
+        old="        key=age,",
+        new="        key=lambda candidate: candidate.name,",
+        tier="1 cli",
+        rationale="Any naming scheme derived from a clock misorders "
+        "somewhere -- a name reused after eviction, a backwards NTP step. "
+        "The filesystem already records when each file was written.",
+        suites=("tests.unit.test_cli",),
+    ),
+    Mutant(
+        name="ring-buffer-loses-sub-second-precision",
+        path="src/boot_err_shim/cli.py",
+        old='        return directory / f"{stamp}.{int(round((at % 1) * 1_000_000)):06d}-{label}.png"',
+        new='        return directory / f"{stamp}-{label}.png"',
+        tier="1 cli",
+        rationale="Whole-second names collide constantly, and the collision "
+        "loop cannot then escape, because nudging the timestamp no longer "
+        "changes the name.",
+        suites=("tests.unit.test_cli",),
+    ),
+    Mutant(
+        name="configure-snapshot-is-rotated-away",
+        path="src/boot_err_shim/cli.py",
+        old='            if candidate.name != "configure.png" and candidate != path',
+        new="            if candidate != path",
+        tier="1 cli + 6 ring-buffer",
+        rationale="`configure --from` refers to that file by name; rotating "
+        "it away breaks the documented way to iterate on a calibration.",
+        suites=("tests.unit.test_cli",),
+    ),
+    Mutant(
+        name="output-crashes-on-an-ascii-terminal",
+        path="src/boot_err_shim/cli.py",
+        old="def main(argv: list[str] | None = None) -> int:\n    _make_output_lossy()",
+        new="def main(argv: list[str] | None = None) -> int:",
+        tier="1 cli + 6 vectors",
+        rationale="Under LANG=C, printing a decoded screen containing an "
+        "unknown glyph raised UnicodeEncodeError -- an untyped exception "
+        "out of the CLI, on the exact path an operator uses to diagnose "
+        "a non-matching console.",
+        suites=("tests.unit.test_cli",),
+    ),
     Mutant(
         name="log-newline-not-escaped",
         path="src/boot_err_shim/log.py",
@@ -653,20 +709,38 @@ MUTANTS: list[Mutant] = [
 ]
 
 
+#: Seconds a single suite run may take before the mutant is judged to have
+#: hung. Generous enough for the whole suite on a slow machine.
+SUITE_TIMEOUT = 1800
+
+
 def run_suite(suites: tuple[str, ...] = ()) -> tuple[bool, str]:
-    """Run the suite, or just the named modules. Returns (passed, output)."""
+    """Run the suite, or just the named modules. Returns (passed, output).
+
+    A mutant that makes the program loop forever must not take the harness
+    with it. One did: removing the sub-second component from a snapshot
+    filename left a collision loop that could never find a free name, and the
+    run simply stopped. Timing out counts as failing, which is the right
+    answer -- a hang is a defect the suite noticed.
+    """
     if suites:
         command = [sys.executable, "-m", "unittest", *suites]
     else:
         command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "."]
 
-    completed = subprocess.run(
-        command,
-        cwd=REPO,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=REPO,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            timeout=SUITE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as expired:
+        partial = (expired.stdout or b"").decode("utf-8", "replace")
+        return False, partial + f"\nTIMED OUT after {SUITE_TIMEOUT}s (the mutant hangs)"
+
     output = completed.stdout.decode("utf-8", "replace")
     return completed.returncode == 0, output
 

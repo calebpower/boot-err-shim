@@ -66,6 +66,34 @@ class TestFilesExist(unittest.TestCase):
     def test_the_unit_has_unix_line_endings(self) -> None:
         self.assertNotIn(b"\r\n", UNIT.read_bytes())
 
+    def test_every_shell_script_has_unix_line_endings(self) -> None:
+        """Not just the init files -- anything an interpreter reads.
+
+        containers/stages.sh acquired CRLF from a tooling step on Windows and
+        dash rejected it with `set: Illegal option -`, because the `\\r` had
+        become part of the option. .gitattributes normalises this on the way
+        into git, which is precisely why it does not protect the working tree,
+        and the working tree is what the container mounts.
+        """
+        scripts = sorted(
+            path
+            for path in REPO_ROOT.rglob("*.sh")
+            if ".git" not in path.parts and "build" not in path.parts
+        )
+        scripts.append(RC_SCRIPT)
+        self.assertGreaterEqual(len(scripts), 2, "no scripts found to check")
+
+        for path in scripts:
+            with self.subTest(script=path.relative_to(REPO_ROOT).as_posix()):
+                self.assertNotIn(b"\r\n", path.read_bytes())
+
+    def test_every_shell_script_starts_with_an_interpreter_line(self) -> None:
+        for path in sorted(REPO_ROOT.rglob("*.sh")):
+            if ".git" in path.parts:
+                continue
+            with self.subTest(script=path.name):
+                self.assertTrue(path.read_bytes().startswith(b"#!"))
+
 
 class TestSystemdUnit(unittest.TestCase):
     def setUp(self) -> None:
