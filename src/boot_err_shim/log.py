@@ -24,6 +24,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .errors import ConfigError
+
 LOGGER_NAME = "boot_err_shim"
 
 #: Sentinel field values that would otherwise render ambiguously.
@@ -174,10 +176,25 @@ def setup_logging(
             logger.addHandler(handler)
 
     if file is not None:
-        file.parent.mkdir(parents=True, exist_ok=True)
-        rotating = logging.handlers.RotatingFileHandler(
-            str(file), maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8"
-        )
+        # Unlike syslog, an explicitly configured file is not optional: the
+        # operator asked for it by name, and quietly carrying on without it
+        # would leave them tailing a file that never gets written.
+        #
+        # Raised as a typed error rather than an OSError because the daemon
+        # runs unprivileged and /var/log is root-owned, so "cannot create the
+        # log file" is a routine first-run mistake with a one-line fix -- not
+        # something anyone should have to read a traceback to work out.
+        try:
+            file.parent.mkdir(parents=True, exist_ok=True)
+            rotating = logging.handlers.RotatingFileHandler(
+                str(file), maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            )
+        except OSError as exc:
+            raise ConfigError(
+                f"log.file {file}: cannot open for writing: {exc}. "
+                f"The daemon runs unprivileged, so create it first: "
+                f"touch {file} && chown <service-user> {file}"
+            ) from exc
         rotating.setFormatter(ShimFormatter(with_time=True))
         logger.addHandler(rotating)
 

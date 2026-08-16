@@ -178,6 +178,56 @@ def load(args: argparse.Namespace) -> Config:
     return load_config(resolve_config_path(args.config))
 
 
+def _log_destinations(config: Config) -> list[str]:
+    """Every place this configuration will actually write log lines.
+
+    Worth spelling out because the answer is not obvious from any one file.
+    Under rc(8) the daemon's stderr goes to /dev/null, so syslog is the only
+    sink -- and FreeBSD's stock syslog.conf routes *.notice and above to
+    /var/log/messages, which drops everything this program logs at INFO. A
+    perfectly healthy daemon therefore looks silent, and the first thing you
+    see is a warning.
+    """
+    from .log import under_journald
+
+    lines = [f"log level   {config.log.level}"]
+
+    if under_journald():
+        lines.append("log to      journald (stderr) -- journalctl -u boot-err-shim")
+    else:
+        lines.append("log to      stderr (discarded by daemon(8) under rc)")
+
+    socket_path = config.defaults.syslog_socket
+    if config.log.syslog == "never":
+        lines.append("syslog      disabled by config")
+    elif under_journald() and config.log.syslog == "auto":
+        lines.append("syslog      skipped: journald is already capturing stderr")
+    elif socket_path is None:
+        lines.append("syslog      unavailable on this platform")
+    elif not socket_path.exists():
+        lines.append(f"syslog      {socket_path} does not exist -- syslogd not running?")
+    else:
+        lines.append(f"syslog      {socket_path}")
+        if config.log.level == "INFO":
+            lines.append(
+                "            note: INFO is below syslog's notice threshold, so a"
+            )
+            lines.append(
+                "            stock FreeBSD /etc/syslog.conf shows only WARNING and"
+            )
+            lines.append(
+                "            above. Add: *.info /var/log/boot-err-shim.log"
+            )
+
+    if config.log.file is None:
+        lines.append("log file    none (set log.file for a rotating file)")
+    else:
+        state = "exists" if config.log.file.exists() else "will be created"
+        lines.append(f"log file    {config.log.file} ({state}, rotates at 2MB x 5)")
+
+    return lines
+
+
 def command_check_config(args: argparse.Namespace) -> int:
     path = resolve_config_path(args.config)
     config = load_config(path)
@@ -190,6 +240,11 @@ def command_check_config(args: argparse.Namespace) -> int:
     print(f"  key         {config.detect.key} (keysym 0x{config.detect.keysym:02x})")
     print(f"  calibration {config.detect.calibration}", end="")
     print("" if config.detect.calibration.exists() else "  [MISSING]")
+
+    # Where the logs go, because "where is the log?" should be answerable
+    # from the program rather than by reading the rc script and syslog.conf.
+    for line in _log_destinations(config):
+        print(f"  {line}")
     for index, line in enumerate(config.detect.lines, 1):
         print(f"  text {index}/{len(config.detect.lines)}  {line!r}")
 

@@ -158,6 +158,49 @@ the Virtual Console applet and is disabled by default.
 The VNC password is limited to **8 characters** by the RFB protocol. Anything
 longer is silently truncated by every implementation, including this one.
 
+## Where are the logs?
+
+`boot-err-shim check-config` tells you, for your config, on your machine. In
+general:
+
+**Linux (systemd).** `journalctl -u boot-err-shim -f`. The unit captures
+stderr, and the daemon notices journald and skips syslog so nothing appears
+twice.
+
+**FreeBSD (rc.d).** `daemon(8)` sends stderr to `/dev/null`, so syslog is the
+only sink — and this catches people out:
+
+> FreeBSD's stock `/etc/syslog.conf` routes `*.notice` and above to
+> `/var/log/messages`. This program logs routine events at **INFO**, which is
+> below that, so a perfectly healthy daemon looks completely silent. The first
+> thing you see is a `WARNING`.
+
+Two ways to see everything:
+
+```sh
+# either: give it its own syslog file
+echo '*.info                                          /var/log/boot-err-shim.log' \
+    >> /etc/syslog.conf
+touch /var/log/boot-err-shim.log
+service syslogd reload
+
+# or: skip syslog and let the daemon write its own rotating file
+#   log.file = "/var/log/boot-err-shim.log"    in boot-err-shim.conf
+touch /var/log/boot-err-shim.log
+chown boot-err-shim /var/log/boot-err-shim.log   # it runs unprivileged
+```
+
+That `chown` is not optional: `/var/log` is root-owned, and without it the
+daemon cannot create the file. It says so and exits rather than starting up
+half-configured.
+
+What you should see once it is working, at `WARNING` and above:
+
+```
+boot-err-shim: WARNING ping.down host=10.0.0.50 reason=unreachable failures=3 threshold=3
+boot-err-shim: WARNING key.pressed key=Y keysym=89 host=10.0.0.50
+```
+
 ## Configuration
 
 Start from `boot-err-shim.conf.sample`, which documents every key. Two things

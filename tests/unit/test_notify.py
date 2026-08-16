@@ -205,6 +205,61 @@ class TestNotifyThroughTheDaemon(unittest.TestCase):
         self.assertIn("notify.failed", stream.getvalue())
 
 
+class TestUnwritableLogFile(unittest.TestCase):
+    """An explicitly configured file is not optional.
+
+    Syslog degrades quietly, on purpose: losing that copy is a nuisance. A
+    file the operator named is different -- carrying on without it leaves
+    them tailing something that never gets written. And under rc(8) the
+    daemon's stderr goes to /dev/null, so an OSError here would vanish
+    entirely, taking the daemon with it and explaining nothing.
+    """
+
+    def setUp(self) -> None:
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.dir = Path(self._dir.name)
+        self.addCleanup(self._reset)
+
+    def _reset(self) -> None:
+        import logging
+
+        from boot_err_shim.log import LOGGER_NAME
+
+        logger = logging.getLogger(LOGGER_NAME)
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+            handler.close()
+
+    def test_an_unopenable_file_is_a_typed_config_error(self) -> None:
+        from boot_err_shim.errors import ConfigError
+        from boot_err_shim.log import setup_logging
+
+        # A directory where the file should be: open() fails on every
+        # platform, without needing to manufacture a permission denial.
+        target = self.dir / "logs"
+        target.mkdir()
+
+        with self.assertRaises(ConfigError) as caught:
+            setup_logging(stream=io.StringIO(), syslog="never", file=target)
+
+        message = str(caught.exception)
+        self.assertIn(str(target), message)
+        self.assertIn("chown", message, "the message should say how to fix it")
+
+    def test_a_writable_file_still_works(self) -> None:
+        import logging
+
+        from boot_err_shim.log import event, get_logger, setup_logging
+
+        target = self.dir / "sub" / "shim.log"
+        setup_logging(stream=io.StringIO(), syslog="never", file=target)
+        event(get_logger(), logging.WARNING, "key.pressed", key="Y")
+        for handler in logging.getLogger("boot_err_shim").handlers:
+            handler.flush()
+        self.assertIn("key.pressed", target.read_text(encoding="utf-8"))
+
+
 class TestSyslogHandler(unittest.TestCase):
     """The other sink, which only exists on the deployment platforms."""
 
