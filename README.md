@@ -55,12 +55,30 @@ without one is guesswork, and this program declines to guess about keystrokes.
 
 ```sh
 make install-freebsd
-sysrc boot_err_shim_enable=YES
+
+# The service user. The rc script defaults to it and will refuse to start
+# without it; `make install-freebsd` prints this line but does not run it.
+pw useradd boot-err-shim -d /nonexistent -s /usr/sbin/nologin
+chown -R boot-err-shim /var/db/boot-err-shim
+
 cp /usr/local/etc/boot-err-shim.conf.sample /usr/local/etc/boot-err-shim.conf
 $EDITOR /usr/local/etc/boot-err-shim.conf
-chmod 600 /usr/local/etc/boot-err-shim.conf
+
+# 0640 root:boot-err-shim, NOT 0600 root:wheel. The daemon runs as
+# boot-err-shim and cannot read a root-owned 0600 file, which is the first
+# thing that goes wrong. Group-owned means it can read the password and
+# cannot rewrite its own config.
+chown root:boot-err-shim /usr/local/etc/boot-err-shim.conf
+chmod 640 /usr/local/etc/boot-err-shim.conf
+
+sysrc boot_err_shim_enable=YES
 service boot_err_shim start
 ```
+
+`service boot_err_shim start` checks all of the above before it forks, and
+names whichever one is wrong. On Linux none of this applies: the systemd unit
+uses `DynamicUser` and `LoadCredential`, so there is no account to create and
+the config stays root-owned `0600`.
 
 ### Linux (Ubuntu 26.04 and similar)
 

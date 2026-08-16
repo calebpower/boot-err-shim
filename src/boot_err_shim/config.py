@@ -325,10 +325,23 @@ class Config:
 
 
 def _check_permissions(path: Path, has_password: bool) -> None:
-    """A config holding a VNC password must not be readable by the world.
+    """A config holding a VNC password must not be world-readable.
 
     Skipped where POSIX modes are not meaningful. This is a real check, not a
     warning: the password grants console access to a server.
+
+    Group-readable is allowed, and that is deliberate rather than lax. The
+    daemon runs as an unprivileged service user and has to read this file, so
+    forbidding the group bit leaves exactly one arrangement that works --
+    owned by the service user, mode 0600 -- and that is the *weaker* of the
+    two options, because a compromised daemon could then rewrite its own
+    config to point at another host and press keys at it.
+
+    Allowing 0640 root:boot-err-shim means the daemon can read the file and
+    cannot alter it. Refusing that pushed operators towards the arrangement
+    with fewer guarantees, which is the opposite of what a permission check
+    is for. World-readable is still refused outright: that is the case where
+    any local user learns the password.
     """
     if not has_password or os.name != "posix":
         return
@@ -336,10 +349,10 @@ def _check_permissions(path: Path, has_password: bool) -> None:
         mode = path.stat().st_mode
     except OSError as exc:
         raise ConfigError(f"{path}: cannot stat: {exc}") from exc
-    if mode & (stat.S_IRGRP | stat.S_IROTH):
+    if mode & stat.S_IROTH:
         raise ConfigError(
-            f"{path}: contains vnc.password but is readable beyond its owner "
-            f"(mode {stat.S_IMODE(mode):04o}); run: chmod 600 {path}"
+            f"{path}: contains vnc.password but is world-readable "
+            f"(mode {stat.S_IMODE(mode):04o}); run: chmod o-r {path}"
         )
 
 

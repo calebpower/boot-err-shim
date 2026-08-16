@@ -88,10 +88,18 @@ install-freebsd: install-common
 	install -d -m 0750 $(DESTDIR)/var/db/boot-err-shim
 	@echo
 	@echo 'Installed. Next:'
-	@echo '  cp $(PREFIX)/etc/boot-err-shim.conf.sample $(PREFIX)/etc/boot-err-shim.conf'
-	@echo '  $$EDITOR $(PREFIX)/etc/boot-err-shim.conf && chmod 600 $(PREFIX)/etc/boot-err-shim.conf'
+	@echo '  # 1. the service user, first: everything below refers to it'
 	@echo '  pw useradd $(SERVICE_USER) -d /nonexistent -s /usr/sbin/nologin || true'
-	@echo '  chown $(SERVICE_USER) /var/db/boot-err-shim'
+	@echo '  chown -R $(SERVICE_USER) /var/db/boot-err-shim'
+	@echo
+	@echo '  # 2. the config. It must be READABLE BY $(SERVICE_USER), which'
+	@echo '  #    root-owned 0600 is not -- that is the usual first failure.'
+	@echo '  cp $(PREFIX)/etc/boot-err-shim.conf.sample $(PREFIX)/etc/boot-err-shim.conf'
+	@echo '  $$EDITOR $(PREFIX)/etc/boot-err-shim.conf'
+	@echo '  chown root:$(SERVICE_USER) $(PREFIX)/etc/boot-err-shim.conf'
+	@echo '  chmod 640 $(PREFIX)/etc/boot-err-shim.conf'
+	@echo
+	@echo '  # 3. start it'
 	@echo '  sysrc boot_err_shim_enable=YES && service boot_err_shim start'
 
 .PHONY: install-linux

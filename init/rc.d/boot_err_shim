@@ -26,10 +26,21 @@ load_rc_config $name
 : ${boot_err_shim_enable:="NO"}
 : ${boot_err_shim_config:="/usr/local/etc/boot-err-shim.conf"}
 : ${boot_err_shim_user:="boot-err-shim"}
+: ${boot_err_shim_state:="/var/db/boot-err-shim"}
 : ${boot_err_shim_flags:=""}
 
 pidfile="/var/run/${name}.pid"
-procname="/usr/local/sbin/boot-err-shim"
+shim="/usr/local/sbin/boot-err-shim"
+
+# procname must name whatever owns the pid in $pidfile, and with daemon -P
+# that is daemon(8) itself, not the shim. Two reasons not to point it at the
+# shim: the pid belongs to the supervisor, and the shim is a zipapp with a
+# `#!/usr/bin/env python3` line, so its process is python3 rather than
+# anything matching the installed path.
+#
+# -t is deliberately not passed either. It rewrites the supervisor's process
+# title, which is exactly the string rc.subr matches against here.
+procname="/usr/sbin/daemon"
 
 # daemon(8) supervises: -r restarts the program if it exits, -f sends its
 # output to /dev/null, and -u drops privilege. The daemon needs none: ping(8)
@@ -41,8 +52,8 @@ procname="/usr/local/sbin/boot-err-shim"
 # is caught by start_precmd below, before the fork, where the operator can
 # still see it.
 command="/usr/sbin/daemon"
-command_args="-r -f -P ${pidfile} -t ${name} -u ${boot_err_shim_user} \
-    ${procname} run -c ${boot_err_shim_config} ${boot_err_shim_flags}"
+command_args="-r -f -P ${pidfile} -u ${boot_err_shim_user} \
+    ${shim} run -c ${boot_err_shim_config} ${boot_err_shim_flags}"
 
 start_precmd="${name}_precmd"
 stop_postcmd="${name}_postcmd"
@@ -54,13 +65,69 @@ boot_err_shim_precmd()
 		    "${boot_err_shim_config}.sample and edit it."
 	fi
 
-	# Validated here, in the foreground, so a mistake is reported to the
-	# person running `service start` rather than disappearing into a
-	# forked process whose output goes nowhere.
-	if ! su -m "${boot_err_shim_user}" -c \
-	    "${procname} check-config -c ${boot_err_shim_config}" > /dev/null; then
+	if ! pw usershow "${boot_err_shim_user}" > /dev/null 2>&1; then
+		err 1 "the service user ${boot_err_shim_user} does not exist. Run:" \
+		    "pw useradd ${boot_err_shim_user} -d /nonexistent" \
+		    "-s /usr/sbin/nologin"
+	fi
+
+	# Can the service user actually read the config?
+	#
+	# Checked by inspecting ownership rather than by becoming the user.
+	# `su -m ${user} -c ...` runs the command through the *target* account's
+	# shell, and a service account's shell is /usr/sbin/nologin, so that
+	# refuses -- and the refusal is indistinguishable from a bad config,
+	# which is what this used to report. Wrong diagnosis, wrong fix, wasted
+	# evening.
+	_owner=$(stat -f '%Su' "${boot_err_shim_config}")
+	_group=$(stat -f '%Sg' "${boot_err_shim_config}")
+	_mode=$(stat -f '%Lp' "${boot_err_shim_config}")
+	_readable=no
+
+	case "${_mode}" in
+	*[4567]) _readable=yes ;;                      # world-readable
+	esac
+	if [ "${_owner}" = "${boot_err_shim_user}" ]; then
+		case "${_mode}" in
+		[4567]*) _readable=yes ;;                  # owner-readable
+		esac
+	fi
+	if id -Gn "${boot_err_shim_user}" 2>/dev/null | tr ' ' '\n' \
+	    | grep -qx "${_group}"; then
+		case "${_mode}" in
+		?[4567]*) _readable=yes ;;                 # group-readable
+		esac
+	fi
+
+	if [ "${_readable}" != yes ]; then
+		err 1 "${boot_err_shim_config} (owner ${_owner}:${_group}," \
+		    "mode ${_mode}) cannot be read by ${boot_err_shim_user}." \
+		    "Run: chown root:${boot_err_shim_user}" \
+		    "${boot_err_shim_config} && chmod 640" \
+		    "${boot_err_shim_config}"
+	fi
+
+	# Validated in the foreground, so a mistake reaches the person running
+	# `service start` rather than a forked process whose output goes to
+	# /dev/null. Run as root, which can always read the file -- readability
+	# by the service user is the separate check above, and it gives a far
+	# more specific error than "invalid config" would.
+	if ! "${shim}" check-config -c "${boot_err_shim_config}" > /dev/null; then
 		err 1 "${boot_err_shim_config} is not valid. Run:" \
-		    "${procname} check-config -c ${boot_err_shim_config}"
+		    "${shim} check-config -c ${boot_err_shim_config}"
+	fi
+
+	if [ ! -d "${boot_err_shim_state}" ]; then
+		err 1 "${boot_err_shim_state} does not exist. Run:" \
+		    "mkdir -p ${boot_err_shim_state} && chown" \
+		    "${boot_err_shim_user} ${boot_err_shim_state}"
+	fi
+	_state_owner=$(stat -f '%Su' "${boot_err_shim_state}")
+	if [ "${_state_owner}" != "${boot_err_shim_user}" ]; then
+		err 1 "${boot_err_shim_state} is owned by ${_state_owner}," \
+		    "not ${boot_err_shim_user}; the daemon could not write its" \
+		    "calibration or lock file. Run: chown -R" \
+		    "${boot_err_shim_user} ${boot_err_shim_state}"
 	fi
 }
 

@@ -601,13 +601,33 @@ class TestPasswordFilePermissions(unittest.TestCase):
             _check_permissions(_FakePath(0o644), has_password=True)
         message = str(caught.exception)
         self.assertIn("0644", message)
-        self.assertIn("chmod 600", message)
+        self.assertIn("chmod o-r", message)
 
-    def test_group_readable_with_a_password_is_rejected(self) -> None:
-        with mock.patch("boot_err_shim.config.os.name", "posix"), self.assertRaises(
-            ConfigError
-        ):
+    def test_group_readable_with_a_password_is_allowed(self) -> None:
+        """0640 root:service is the better deployment, not a lapse.
+
+        The daemon runs unprivileged and must read this file. Forbidding the
+        group bit leaves only "owned by the service user, mode 0600", which
+        is weaker: a compromised daemon could rewrite its own config to point
+        at another host and press keys at it. Under 0640 root:boot-err-shim
+        it can read and cannot alter.
+        """
+        with mock.patch("boot_err_shim.config.os.name", "posix"):
             _check_permissions(_FakePath(0o640), has_password=True)
+
+    def test_world_readable_is_still_rejected(self) -> None:
+        # The case that actually leaks: any local user learns the password.
+        for mode in (0o604, 0o644, 0o666, 0o777):
+            with self.subTest(mode=oct(mode)):
+                with mock.patch("boot_err_shim.config.os.name", "posix"):
+                    with self.assertRaises(ConfigError):
+                        _check_permissions(_FakePath(mode), has_password=True)
+
+    def test_the_rejection_says_how_to_fix_it(self) -> None:
+        with mock.patch("boot_err_shim.config.os.name", "posix"):
+            with self.assertRaises(ConfigError) as caught:
+                _check_permissions(_FakePath(0o644), has_password=True)
+        self.assertIn("chmod o-r", str(caught.exception))
 
     def test_owner_only_is_accepted(self) -> None:
         with mock.patch("boot_err_shim.config.os.name", "posix"):

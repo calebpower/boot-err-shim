@@ -118,7 +118,7 @@ MUTANTS: list[Mutant] = [
     Mutant(
         name="password-permission-check-dropped",
         path="src/boot_err_shim/config.py",
-        old="    if mode & (stat.S_IRGRP | stat.S_IROTH):",
+        old="    if mode & stat.S_IROTH:",
         new="    if False:",
         tier="1 config",
         rationale="A world-readable config hands console access to any local "
