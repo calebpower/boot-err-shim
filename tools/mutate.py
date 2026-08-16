@@ -617,6 +617,19 @@ MUTANTS: list[Mutant] = [
         suites=("tests.concurrency.test_signals_and_writes",),
     ),
     Mutant(
+        name="press-does-not-reset-failures",
+        path="src/boot_err_shim/daemon.py",
+        old='            reason="match.pressed",\n            reset_failures=True,',
+        new='            reason="match.pressed",\n            reset_failures=False,',
+        tier="4 safety matrix + 9 simulation",
+        rationale="Staying in recovery after a successful press is how a "
+        "daemon presses again at a console already on its way up.",
+        suites=(
+            "tests.contract.test_safety_matrix",
+            "tests.contract.test_daemon_loop",
+        ),
+    ),
+    Mutant(
         name="log-newline-not-escaped",
         path="src/boot_err_shim/log.py",
         old='            .replace("\\n", "\\\\n")',
