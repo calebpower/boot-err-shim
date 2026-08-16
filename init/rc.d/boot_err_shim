@@ -26,10 +26,21 @@ load_rc_config $name
 : ${boot_err_shim_enable:="NO"}
 : ${boot_err_shim_config:="/usr/local/etc/boot-err-shim.conf"}
 : ${boot_err_shim_user:="boot-err-shim"}
+: ${boot_err_shim_group:="${boot_err_shim_user}"}
 : ${boot_err_shim_state:="/var/db/boot-err-shim"}
 : ${boot_err_shim_flags:=""}
 
-pidfile="/var/run/${name}.pid"
+# The pidfile gets a directory of its own rather than sitting in /var/run.
+#
+# daemon(8) drops to ${boot_err_shim_user} before it opens the -P file, and
+# /var/run is root-owned 0755, so writing there fails with
+# "ppid file: Permission denied" -- from daemon(8), which calls the -P file
+# the ppid file, and with nothing in the message tying it to this service.
+#
+# start_precmd creates the directory owned by the service user on every
+# start, because /var/run does not survive a reboot.
+piddir="/var/run/${name}"
+pidfile="${piddir}/${name}.pid"
 shim="/usr/local/sbin/boot-err-shim"
 
 # rc(8) runs with PATH=/sbin:/bin:/usr/sbin:/usr/bin, which does not include
@@ -120,6 +131,14 @@ boot_err_shim_precmd()
 		    "-s /usr/sbin/nologin"
 	fi
 
+	# Somewhere daemon(8) can write its pidfile after dropping privilege.
+	# Recreated every start: /var/run is cleared at boot.
+	if ! install -d -o "${boot_err_shim_user}" -g "${boot_err_shim_group}" \
+	    -m 0755 "${piddir}"; then
+		err 1 "cannot create ${piddir} owned by" \
+		    "${boot_err_shim_user}:${boot_err_shim_group}"
+	fi
+
 	# Can the service user actually read the config?
 	#
 	# Checked by inspecting ownership rather than by becoming the user.
@@ -183,6 +202,7 @@ boot_err_shim_precmd()
 boot_err_shim_postcmd()
 {
 	rm -f "${pidfile}"
+	rmdir "${piddir}" 2>/dev/null || true
 }
 
 run_rc_command "$1"

@@ -193,6 +193,31 @@ class TestRcScript(unittest.TestCase):
         self.assertIn("check-config", self.text)
         self.assertIn("start_precmd=", self.text)
 
+    def test_the_pidfile_is_not_directly_in_var_run(self) -> None:
+        """It must live somewhere the service user can write.
+
+        daemon(8) drops to the service user before opening the -P file, and
+        /var/run is root-owned 0755, so a pidfile placed straight in there
+        fails with "ppid file: Permission denied" -- a message that names
+        neither this service nor the reason.
+        """
+        self.assertNotIn('pidfile="/var/run/${name}.pid"', self.text)
+        self.assertIn('piddir="/var/run/${name}"', self.text)
+        self.assertIn('pidfile="${piddir}/', self.text)
+
+    def test_the_pidfile_directory_is_created_owned_by_the_service_user(self) -> None:
+        # /var/run does not survive a reboot, so this has to happen on every
+        # start rather than at install time.
+        self.assertIn('install -d -o "${boot_err_shim_user}"', self.text)
+        self.assertIn('"${piddir}"', self.text)
+
+        # It has to be in start_precmd specifically, not merely somewhere in
+        # the file: anywhere later and daemon(8) has already tried to write.
+        body = self.text.split("boot_err_shim_precmd()", 1)[1]
+        body = body.split("boot_err_shim_postcmd()", 1)[0]
+        self.assertIn("install -d", body)
+        self.assertIn("${piddir}", body)
+
     def test_it_supervises_with_daemon(self) -> None:
         self.assertIn("/usr/sbin/daemon", self.text)
         self.assertIn("-r ", self.text)
