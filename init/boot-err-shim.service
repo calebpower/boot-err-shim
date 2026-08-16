@@ -1,0 +1,62 @@
+[Unit]
+Description=Press 'Y' at the PERC flash-failure prompt so the host boots
+Documentation=https://github.com/calebpower/boot-err-shim
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# The config is handed over as a credential rather than read from /etc
+# directly. It contains the iDRAC password, so it is root-owned and mode 0600,
+# which a DynamicUser service cannot read; systemd reads it as root and
+# presents it at %d/config owned by the transient user with mode 0400. That
+# keeps both properties -- an unprivileged daemon and a password no other
+# local user can read -- without loosening either.
+LoadCredential=config:/etc/boot-err-shim.conf
+
+# Validated before the daemon starts, so a bad config is a failed start with
+# a message rather than a restart loop.
+ExecStartPre=/usr/local/sbin/boot-err-shim check-config -c %d/config
+ExecStart=/usr/local/sbin/boot-err-shim run -c %d/config
+
+Restart=always
+RestartSec=30s
+
+# systemd creates and owns /var/lib/boot-err-shim, which is where the
+# calibration, the snapshot ring buffer, the lock and the intervention history
+# live. It must agree with STATE_DIR_NAME in platform_.py; a structural test
+# checks that it does.
+StateDirectory=boot-err-shim
+StateDirectoryMode=0750
+
+# The daemon needs no privilege whatsoever. ping(8) works for ordinary users
+# via net.ipv4.ping_group_range, and VNC is an ordinary TCP connection.
+DynamicUser=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

@@ -127,11 +127,19 @@ Durations accept plain seconds (`120`) or a suffix (`2m`, `90s`, `1h`).
 | `configure` | grab a frame, analyse it, write a calibration |
 | `capture` | grab a frame and write a PNG, no analysis |
 | `test-detect` | run the detector against a saved PNG; no hardware needed |
+| `show-calibration` | print the calibration, including the learned font |
 | `check-config` | validate the config, exit nonzero if it is wrong |
 
 Useful flags: `configure --from screen.png` analyses a saved image instead of
 connecting, so you can iterate on a calibration without rebooting anything.
-`run --no-act` does everything except send the key.
+`run --no-act` does everything except send the key. `test-detect --annotate
+out.png` writes a copy of the frame with a box drawn around exactly the pixels
+the detector compared.
+
+`show-calibration --glyphs` prints the font it learned from your console. A
+zero pixel delta says the glyphs are self-consistent; only looking at them
+says they are the letters they claim to be, and anyone can tell a `D` from a
+smear.
 
 ## What it does, in order
 

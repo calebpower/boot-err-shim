@@ -1,0 +1,72 @@
+#!/bin/sh
+#
+# boot-err-shim: press 'Y' at the PERC flash-failure prompt so the host boots.
+#
+# PROVIDE: boot_err_shim
+# REQUIRE: LOGIN NETWORKING syslogd
+# KEYWORD: shutdown
+#
+# Add the following to /etc/rc.conf to enable:
+#
+#   boot_err_shim_enable="YES"
+#
+# Optional:
+#
+#   boot_err_shim_config="/usr/local/etc/boot-err-shim.conf"
+#   boot_err_shim_user="boot-err-shim"
+#   boot_err_shim_flags=""            # e.g. --no-act
+
+. /etc/rc.subr
+
+name="boot_err_shim"
+rcvar="boot_err_shim_enable"
+
+load_rc_config $name
+
+: ${boot_err_shim_enable:="NO"}
+: ${boot_err_shim_config:="/usr/local/etc/boot-err-shim.conf"}
+: ${boot_err_shim_user:="boot-err-shim"}
+: ${boot_err_shim_flags:=""}
+
+pidfile="/var/run/${name}.pid"
+procname="/usr/local/sbin/boot-err-shim"
+
+# daemon(8) supervises: -r restarts the program if it exits, -f sends its
+# output to /dev/null, and -u drops privilege. The daemon needs none: ping(8)
+# is setuid and VNC is an ordinary TCP connection.
+#
+# Output goes to /dev/null rather than to syslog because the program has its
+# own syslog handler and would otherwise appear twice in the log. Anything
+# that would be lost that way -- a bad config, an unreadable calibration --
+# is caught by start_precmd below, before the fork, where the operator can
+# still see it.
+command="/usr/sbin/daemon"
+command_args="-r -f -P ${pidfile} -t ${name} -u ${boot_err_shim_user} \
+    ${procname} run -c ${boot_err_shim_config} ${boot_err_shim_flags}"
+
+start_precmd="${name}_precmd"
+stop_postcmd="${name}_postcmd"
+
+boot_err_shim_precmd()
+{
+	if [ ! -f "${boot_err_shim_config}" ]; then
+		err 1 "${boot_err_shim_config} does not exist. Copy" \
+		    "${boot_err_shim_config}.sample and edit it."
+	fi
+
+	# Validated here, in the foreground, so a mistake is reported to the
+	# person running `service start` rather than disappearing into a
+	# forked process whose output goes nowhere.
+	if ! su -m "${boot_err_shim_user}" -c \
+	    "${procname} check-config -c ${boot_err_shim_config}" > /dev/null; then
+		err 1 "${boot_err_shim_config} is not valid. Run:" \
+		    "${procname} check-config -c ${boot_err_shim_config}"
+	fi
+}
+
+boot_err_shim_postcmd()
+{
+	rm -f "${pidfile}"
+}
+
+run_rc_command "$1"

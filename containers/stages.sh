@@ -394,6 +394,21 @@ stage_calibrate() {
         && ok "the calibration came over the wire, not from a file" \
         || fail "configure did not connect"
 
+    # Tier 11 evidence, from a font nobody here wrote. The version the unit
+    # suite produces uses the synthetic test font and looks like noise; this
+    # one contains legible letters, which is the whole point of the artefact.
+    mkdir -p "$WORK/evidence"
+    if shim show-calibration -c /tmp/shim.conf --glyphs \
+            > "$WORK/evidence/learned-font-tigervnc.txt" 2>&1; then
+        ok "wrote the learned -misc-fixed font to evidence/"
+        printf '  a sample of the recovered glyphs:\n'
+        sed -n '/^ *D /,/^$/p' "$WORK/evidence/learned-font-tigervnc.txt" \
+            | head -20 | sed 's/^/    /'
+    else
+        sed 's/^/  /' "$WORK/evidence/learned-font-tigervnc.txt"
+        fail "show-calibration failed"
+    fi
+
     stop_console
 }
 
@@ -566,29 +581,73 @@ until a real iDRAC shows that it is needed."
 }
 
 stage_service_linux() {
-    banner "service-linux: the systemd unit"
+    banner "service-linux: packaging and the systemd unit"
     if [ ! -f "$WORK/init/boot-err-shim.service" ]; then
         skip "systemd unit" "init/boot-err-shim.service does not exist yet"
         return
     fi
 
-    if command -v systemd-analyze > /dev/null 2>&1; then
-        if systemd-analyze verify "$WORK/init/boot-err-shim.service" \
-                > /tmp/unit.log 2>&1; then
-            ok "systemd-analyze verify accepts the unit"
-        else
-            sed 's/^/  /' /tmp/unit.log
-            fail "systemd-analyze verify rejected the unit"
-        fi
+    # The real install path, not an approximation of it. This is what
+    # `make install-linux` does on an actual host.
+    if make -C "$WORK" bundle > /tmp/bundle.log 2>&1; then
+        size=$(wc -c < "$WORK/boot-err-shim.pyz")
+        ok "make bundle produced a $size byte zipapp"
     else
-        skip "unit verification" "systemd-analyze is not available"
+        tail -20 /tmp/bundle.log | sed 's/^/  /'
+        fail "make bundle failed"
+        return
+    fi
+
+    # The bundle has to actually run, or the whole stdlib-only promise is
+    # theoretical. Run it from a directory containing no source, so it cannot
+    # accidentally import the package from the working tree.
+    if (cd /tmp && python3 "$WORK/boot-err-shim.pyz" --version) \
+            > /tmp/pyz.log 2>&1; then
+        ok "the bundle runs standalone: $(cat /tmp/pyz.log)"
+    else
+        sed 's/^/  /' /tmp/pyz.log
+        fail "the bundle does not run"
+    fi
+
+    if make -C "$WORK" install-linux > /tmp/install.log 2>&1; then
+        ok "make install-linux completed"
+    else
+        tail -20 /tmp/install.log | sed 's/^/  /'
+        fail "make install-linux failed"
+        return
+    fi
+
+    [ -x /usr/local/sbin/boot-err-shim ] \
+        && ok "the binary is installed and executable" \
+        || fail "the binary is not where the unit expects it"
+    [ -f /etc/systemd/system/boot-err-shim.service ] \
+        && ok "the unit is installed" \
+        || fail "the unit was not installed"
+    [ -f /etc/boot-err-shim.conf.sample ] \
+        && ok "the sample config is installed" \
+        || fail "the sample config was not installed"
+
+    # The installed binary must work as the unit will invoke it.
+    cp /etc/boot-err-shim.conf.sample /etc/boot-err-shim.conf
+    chmod 600 /etc/boot-err-shim.conf
+    /usr/local/sbin/boot-err-shim check-config -c /etc/boot-err-shim.conf \
+        > /tmp/checkconf.log 2>&1
+    check $? "the installed binary validates the installed sample config"
+
+    if systemd-analyze verify /etc/systemd/system/boot-err-shim.service \
+            > /tmp/unit.log 2>&1; then
+        ok "systemd-analyze verify accepts the installed unit"
+    else
+        sed 's/^/  /' /tmp/unit.log
+        fail "systemd-analyze verify rejected the unit"
     fi
 
     skip "booting the unit under systemd" \
         "Requires podman --systemd=always with a writable cgroup hierarchy, \
-which rootless podman on a WSL machine does not provide. The unit is checked \
-statically above and by the structural tier; running it is covered only on a \
-real host."
+which rootless podman on a WSL machine does not provide. The unit is verified \
+statically above, its paths are cross-checked against the code by the \
+structural tier, and the binary it names is installed and exercised here. \
+Actually running it as a service is covered only on a real host."
 }
 
 stage_hostile_text() {

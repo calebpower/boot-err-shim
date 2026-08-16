@@ -15,7 +15,7 @@ text rows looked like is something they can act on.
 
 from __future__ import annotations
 
-from .bitmap import Bitmap
+from .bitmap import Bitmap, contrast_ratio
 from .calibrate import Calibration, Findings
 from .rfb import ServerInfo
 
@@ -112,6 +112,70 @@ def failure_advice(findings: Findings) -> list[str]:
         '  - If the console is scaled or antialiased, set engine = "ocr".',
     ]
     return advice
+
+
+def glyph_sheet(calibration: Calibration, *, columns: int = 6) -> list[str]:
+    """The learned font, laid out for a person to look at.
+
+    Tier 11 produces evidence rather than a verdict, and this is the evidence
+    for the claim underneath everything else: that calibration recovered the
+    console's actual font. A pixel-delta of zero says the glyphs are
+    self-consistent; only looking at them says they are the letters they
+    claim to be. Anyone can tell a 'D' from a smear.
+    """
+    out = [
+        f"{len(calibration.glyphs)} glyphs, "
+        f"{calibration.cell_width}x{calibration.cell_height} cells, "
+        f"{_hex(calibration.foreground)} on {_hex(calibration.background)}",
+        "",
+    ]
+
+    chars = sorted(calibration.glyphs)
+    for start in range(0, len(chars), columns):
+        batch = chars[start : start + columns]
+        rendered = [calibration.glyphs[char].to_rows() for char in batch]
+
+        labels = []
+        for char in batch:
+            name = "space" if char == " " else char
+            labels.append(name.center(calibration.cell_width))
+        out.append("  ".join(labels))
+
+        for row in range(calibration.cell_height):
+            out.append("  ".join(glyph[row] for glyph in rendered))
+        out.append("")
+
+    return out
+
+
+def calibration_summary(calibration: Calibration) -> list[str]:
+    """A short human-facing description of a stored calibration."""
+    contrast = contrast_ratio(calibration.foreground, calibration.background)
+    lines = [
+        f"frame       {calibration.width}x{calibration.height}",
+        f"grid        {calibration.cell_width}x{calibration.cell_height} cells "
+        f"at ({calibration.origin_x}, {calibration.origin_y})",
+        f"region      {calibration.region[0]},{calibration.region[1]} "
+        f"{calibration.region[2]}x{calibration.region[3]} "
+        f"({calibration.region_pixels} px)",
+        f"colours     {_hex(calibration.foreground)} on "
+        f"{_hex(calibration.background)}, contrast {contrast:.1f}:1"
+        f"{', inverted' if calibration.inverted else ''}",
+        f"threshold   {calibration.threshold}",
+        f"glyphs      {len(calibration.glyphs)}",
+        f"verify      {calibration.verify_delta} px differ on re-render"
+        f"{' (exact)' if calibration.exact else ''}",
+        "",
+        "text:",
+    ]
+    lines.extend(f"  {line}" for line in calibration.text)
+
+    if contrast < CONTRAST_FLOOR:
+        lines.append("")
+        lines.append(
+            f"WARNING: contrast {contrast:.1f}:1 is below {CONTRAST_FLOOR:.1f}:1"
+        )
+    return lines
 
 
 def ink_sketch(mask: Bitmap, findings: Findings, *, max_width: int = 76) -> list[str]:

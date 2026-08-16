@@ -123,6 +123,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_config_argument(detect)
     detect.add_argument("image", type=Path, help="PNG to examine")
+    detect.add_argument(
+        "--annotate",
+        type=Path,
+        metavar="PNG",
+        help="write a copy with the compared region outlined",
+    )
+
+    show = subparsers.add_parser(
+        "show-calibration",
+        help="print the calibration, including the learned font",
+        description=(
+            "Everything the calibration knows, in a form a person can check. "
+            "The pixel delta says the glyphs are self-consistent; only "
+            "looking at them says they are the letters they claim to be."
+        ),
+    )
+    _add_config_argument(show)
+    show.add_argument(
+        "--glyphs", action="store_true", help="also print the learned font"
+    )
 
     run = subparsers.add_parser("run", help="the daemon")
     _add_config_argument(run)
@@ -328,9 +348,42 @@ def command_test_detect(args: argparse.Namespace) -> int:
         for line in result.text.splitlines():
             print(f"    | {line}")
 
+    if args.annotate is not None:
+        # Evidence a person can check at a glance: if the box is around the
+        # wrong part of the screen, that is obvious here and invisible in the
+        # difference percentage above.
+        write_frame(args.annotate, frame.outlined(calibration.region))
+        print(f"  annotated copy: {args.annotate}")
+
     print()
     print("MATCH" if result.matched else "NO MATCH")
     return 0 if result.matched else 1
+
+
+def command_show_calibration(args: argparse.Namespace) -> int:
+    from .report import calibration_summary, glyph_sheet
+
+    config = load(args)
+    calibration = Calibration.load(config.detect.calibration)
+
+    print(f"{config.detect.calibration}")
+    for line in calibration_summary(calibration):
+        print(line)
+
+    try:
+        check_calibration(calibration, config.detect.lines)
+    except CalibrationError as exc:
+        print(f"\nSTALE: {exc}", file=sys.stderr)
+        return exc.exit_code
+
+    if args.glyphs:
+        print()
+        for line in glyph_sheet(calibration):
+            print(line)
+    else:
+        print("\n(--glyphs to print the learned font)")
+
+    return 0
 
 
 def command_run(args: argparse.Namespace) -> int:
@@ -446,6 +499,7 @@ COMMANDS = {
     "capture": command_capture,
     "configure": command_configure,
     "test-detect": command_test_detect,
+    "show-calibration": command_show_calibration,
     "run": command_run,
 }
 
