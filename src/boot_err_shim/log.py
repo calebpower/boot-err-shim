@@ -114,14 +114,22 @@ def under_journald() -> bool:
 def _syslog_handler(address: Path | None) -> logging.Handler | None:
     """Try the platform syslog socket; return None if it is not usable.
 
-    Deliberately silent on failure. A machine without a syslog socket should
-    still get logs on stderr rather than a crash at startup.
+    Deliberately silent on failure. A machine without a usable syslog socket
+    should still get logs on stderr rather than refusing to start -- losing
+    the syslog copy is a nuisance, and a daemon that will not run is an
+    outage.
+
+    The guard is broad because the ways this can fail are not all OSError.
+    A path that exists but is a regular file, a platform with no AF_UNIX at
+    all: the second raises AttributeError from inside the standard library,
+    which sailed straight past an `except OSError` and crashed setup. Since
+    the contract here is "never fail", the guard has to actually mean it.
     """
     if address is None or not address.exists():
         return None
     try:
         handler = logging.handlers.SysLogHandler(address=str(address))
-    except (OSError, socket.error):
+    except Exception:  # noqa: BLE001 - see above; this must never propagate
         return None
     handler.setFormatter(ShimFormatter(with_time=False))
     handler.ident = "boot-err-shim: "

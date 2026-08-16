@@ -215,7 +215,13 @@ stop_console() {
 }
 
 write_config() {
-    # $1: destination, $2: extra lines
+    # $1: destination, $2: extra [log] lines, $3: extra [recovery] lines
+    #
+    # Two slots because the extras are appended inside a named table:
+    # passing recovery settings through the [log] slot puts them in
+    # [log], where the parser rejects them by name. That is the
+    # unknown-key rule doing its job, but it makes for a baffling
+    # stage failure.
     mkdir -p "$STATE"
     cat > "$1" <<CONFIG
 [state]
@@ -245,6 +251,7 @@ $THE_MESSAGE_3
 [recovery]
 interval       = 1
 post_fix_sleep = 1
+${3:-}
 
 [log]
 syslog = "never"
@@ -493,6 +500,62 @@ stage_loop() {
     fi
 
     ok "$(ls "$STATE/snapshots" | wc -l) frame(s) in the ring buffer"
+
+    stop_console
+}
+
+stage_escalation() {
+    banner "escalation: a repeatedly failing controller pages somebody"
+    start_vnc
+    show_message
+
+    cat > /tmp/pager.sh <<'PAGER'
+#!/bin/sh
+printf '%s\n' "$*" >> /tmp/paged.log
+PAGER
+    chmod +x /tmp/pager.sh
+    rm -f /tmp/paged.log
+
+    write_config /tmp/esc.conf "" \
+        'max_per_day = 2
+notify_command = ["/tmp/pager.sh", "--host", "192.0.2.1"]'
+    shim configure -c /tmp/esc.conf > /dev/null 2>&1
+    check $? "calibrated"
+
+    # Each cycle fixes the host, so the console has to be put back at the
+    # prompt for the next one. Nothing here presses at a screen that is not
+    # showing it -- the console records what it receives, and that is checked.
+    interventions=0
+    for _ in 1 2 3 4; do
+        shim run -c /tmp/esc.conf --once > /tmp/esc-run.log 2>&1
+        grep -q "key.pressed" /tmp/esc-run.log && \
+            interventions=$((interventions + 1))
+    done
+
+    [ "$interventions" = "4" ] \
+        && ok "four interventions were recorded" \
+        || fail "expected 4 interventions, got $interventions"
+
+    if [ -f /tmp/paged.log ]; then
+        paged=$(wc -l < /tmp/paged.log | tr -d ' ')
+        ok "the pager ran $paged time(s)"
+        # Two are within the limit; the third and fourth are not.
+        [ "$paged" = "2" ] \
+            && ok "it stayed quiet up to the limit and spoke past it" \
+            || fail "expected 2 pages for 4 interventions at max_per_day=2, got $paged"
+        grep -q -- "--host 192.0.2.1" /tmp/paged.log \
+            && ok "the configured arguments reached the pager" \
+            || fail "the pager did not receive its arguments"
+    else
+        sed 's/^/      /' /tmp/esc-run.log
+        fail "the pager never ran"
+    fi
+
+    # The history has to survive a restart, or a crash-looping daemon would
+    # never reach the limit at all.
+    [ -f "$STATE/192.0.2.1.history.json" ] \
+        && ok "the intervention history was persisted per target" \
+        || fail "no history file was written"
 
     stop_console
 }
@@ -852,7 +915,7 @@ stage_regressions() {
 
 # -- driver ------------------------------------------------------------
 
-ALL_STAGES="vectors handshake auth tls capture calibrate detect loop ring-buffer from-snapshot uncalibrated concurrency ocr hostile-text service-linux regressions"
+ALL_STAGES="vectors handshake auth tls capture calibrate detect loop ring-buffer from-snapshot uncalibrated escalation concurrency ocr hostile-text service-linux regressions"
 
 run_stage() {
     case "$1" in
@@ -866,6 +929,7 @@ run_stage() {
         loop)           stage_loop ;;
         ring-buffer)    stage_ring_buffer ;;
         from-snapshot)  stage_from_snapshot ;;
+        escalation)     stage_escalation ;;
         uncalibrated)   stage_uncalibrated ;;
         concurrency)    stage_concurrency ;;
         ocr)            stage_ocr ;;
