@@ -162,9 +162,14 @@ show_message() {
 }
 
 focus_console() {
-    # There is no window manager here, so nothing assigns input focus, and a
-    # key synthesised by Xvnc goes nowhere. A real console always has focus;
-    # this restores that property rather than testing around its absence.
+    # Entirely a property of this fixture, not of the target.
+    #
+    # X delivers keys to whichever window holds focus, there is no window
+    # manager here to assign it, and so a key synthesised by Xvnc goes
+    # nowhere. Firmware has no such notion: the machine is blocked in a
+    # busy-wait and the keyboard controller hands it the scancode, with no
+    # window, no focus and nothing to miss. This call exists to give the
+    # fixture the property the real console has for free.
     window=$(DISPLAY=:1 xdotool search --class xterm 2>/dev/null | tail -1)
     if [ -n "$window" ]; then
         DISPLAY=:1 xdotool windowfocus "$window" 2>/dev/null || true

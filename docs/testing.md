@@ -174,6 +174,32 @@ several have:
 Mutants targeting platform-specific code are gated and reported as **not
 verified** on the other platform rather than counted as caught.
 
+## What the target actually looks like
+
+Worth stating, because two of the fixtures model things the real console does
+not have, and a reader could mistake the fixture for the specification.
+
+The PERC message is **not a dialog**. There is no prompt box, no input field
+and nothing focused; the firmware is blocked in a busy-wait and the whole
+machine is stopped until a scancode arrives. Two consequences follow.
+
+**The framebuffer is completely static.** Nothing redraws, no clock ticks, no
+spinner turns. That is the ideal case for exact bitmap comparison, and the
+expected result on real hardware is `detail=region` at 0.0000% difference,
+with the glyph decoder never running at all. The caret stage exists because
+some firmware does blink one, not because this one is known to.
+
+**Retry is not a recovery strategy here.** Elsewhere a failed match is
+transient -- a screen mid-redraw, a frame captured while something moved --
+and the next cycle sees something different. Against a blocked firmware the
+next cycle sees the identical pixels, so a detection failure at 14:00 is still
+a detection failure at 06:00 tomorrow. Anything that depends on "it will
+resolve itself next time" is wrong in this environment.
+
+The `focus_console` helper in the containerised tier is likewise a fixture
+artefact: X needs a focused window and there is no window manager to assign
+one. Firmware has no such notion.
+
 ## What none of this proves
 
 Named explicitly, because a suite this large is otherwise easy to mistake for
