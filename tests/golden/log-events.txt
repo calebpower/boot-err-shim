@@ -1,0 +1,11 @@
+2026-08-16T14:02:11Z INFO daemon.start host=10.0.0.50 vnc=10.0.0.51:5901 threshold=3 calibrated=true no_act=false
+2026-08-16T14:02:11Z INFO ping.up host=10.0.0.50 reason=ok failures=0 threshold=3
+2026-08-16T14:02:11Z WARNING ping.down host=10.0.0.50 reason=unreachable failures=3 threshold=3
+2026-08-16T14:02:11Z WARNING vnc.connect_failed host=10.0.0.51 port=5901 error=ConnectionFailed detail="connection refused"
+2026-08-16T14:02:11Z INFO vnc.captured width=640 height=400
+2026-08-16T14:02:11Z INFO detect.match detail=region
+2026-08-16T14:02:11Z INFO detect.no_match detail=region-mismatch
+2026-08-16T14:02:11Z WARNING key.pressed key=Y keysym=89 host=10.0.0.50
+2026-08-16T14:02:11Z WARNING intervention.frequent count=4 limit=3 detail="controller is failing repeatedly; replace it"
+2026-08-16T14:02:11Z ERROR key.refused key=Y detail="no calibration"
+2026-08-16T14:02:11Z INFO daemon.stop

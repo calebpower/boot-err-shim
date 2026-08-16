@@ -1,0 +1,17 @@
+connecting 10.0.0.51:5901 ... ok
+  RFB 3.8, security types offered: [2 VNC authentication], TLS: yes
+  desktop: 'idrac-console'
+  framebuffer: 640x400
+
+analysing
+  640x400, ink 2.3%
+  #c0c0c0 on #000000, contrast 11.5:1, threshold 96
+  text rows found: 3
+  grid: 9x16 cells
+  origin: (71, 207)
+  located the message at 71,207 (513x48)
+    1/3  'Disabling writes to flash as the flash part has gone bad.'     57 ok
+    2/3  'Please contact technical support to resolve this issue.'       55 ok
+    3/3  "Please press 'Y' to continue."                                 29 ok
+  learned 25 distinct glyphs
+  verify: re-render matches the framebuffer exactly (0 px differ)

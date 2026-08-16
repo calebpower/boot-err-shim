@@ -1,0 +1,6 @@
+  located the message at 71,207 (513x48)
+    1/3  'Disabling writes to flash as the flash part has gone bad.'     57 ok
+    2/3  'Please contact technical support to resolve this issue.'       55 ok
+    3/3  "Please press 'Y' to continue."                                 29 ok
+  learned 25 distinct glyphs
+  verify: re-render matches the framebuffer exactly (0 px differ)

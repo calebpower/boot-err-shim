@@ -1,0 +1,5 @@
+
+What to try:
+  The screen appears blank. Is the host actually stopped at the
+  error, and is the iDRAC showing the host console rather than a
+  blanked screen? Press a key on the console and capture again.

@@ -1,0 +1,4 @@
+connecting 10.0.0.51:5901 ... ok
+  RFB 3.8, security types offered: [2 VNC authentication], TLS: no
+  desktop: 'idrac-console'
+  framebuffer: 640x400

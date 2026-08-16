@@ -13,11 +13,21 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .bitmap import binarise, contrast_ratio
+from .calibrate import Calibration, Findings, analyse, check_calibration
 from .config import Config, load_config
-from .errors import ShimError
+from .detect import CalibratedDetector
+from .errors import AnalysisError, CalibrationError, ShimError
+from .frame import Frame
 from .log import setup_logging
 from .platform_ import platform_defaults
-from .png import write_frame
+from .png import read_frame, write_frame
+from .report import (
+    failure_advice,
+    findings_report,
+    ink_sketch,
+    success_report,
+)
 from .rfb import client_from_config
 
 
@@ -66,7 +76,78 @@ def build_parser() -> argparse.ArgumentParser:
         help="where to write the PNG (default: screen.png)",
     )
 
+    configure = subparsers.add_parser(
+        "configure",
+        help="learn a calibration from a console showing the error",
+        description=(
+            "Grab the console, work out the character grid and font from the "
+            "message the config says should be on screen, and write a "
+            "calibration. Never sends a keypress, so it is safe to run "
+            "against a live stuck console."
+        ),
+    )
+    _add_config_argument(configure)
+    configure.add_argument(
+        "--from",
+        dest="from_image",
+        type=Path,
+        metavar="PNG",
+        help="analyse a saved image instead of connecting",
+    )
+    configure.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="where to write the calibration (default: from config)",
+    )
+    configure.add_argument(
+        "--cell", type=_parse_pair, metavar="WxH", help="force the cell size"
+    )
+    configure.add_argument(
+        "--origin", type=_parse_pair, metavar="X,Y", help="force the grid origin"
+    )
+    configure.add_argument(
+        "--threshold", type=int, metavar="N", help="force the luminance threshold"
+    )
+    configure.add_argument(
+        "--invert", action="store_true", help="treat dark pixels as the text"
+    )
+    configure.add_argument(
+        "--dry-run", action="store_true", help="analyse but do not write anything"
+    )
+
+    detect = subparsers.add_parser(
+        "test-detect", help="run the detector against a saved PNG"
+    )
+    _add_config_argument(detect)
+    detect.add_argument("image", type=Path, help="PNG to examine")
+
+    run = subparsers.add_parser("run", help="the daemon")
+    _add_config_argument(run)
+    run.add_argument(
+        "--no-act",
+        action="store_true",
+        help="do everything except actually send the key",
+    )
+    run.add_argument(
+        "--once", action="store_true", help="run a single cycle and exit"
+    )
+
     return parser
+
+
+def _parse_pair(value: str) -> tuple[int, int]:
+    """Accept WxH or X,Y."""
+    separator = "x" if "x" in value.lower() else ","
+    try:
+        first, second = value.lower().split(separator)
+        return int(first), int(second)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected two numbers like 9x16 or 72,208; got {value!r}"
+        ) from None
 
 
 def resolve_config_path(explicit: Path | None) -> Path:
@@ -123,9 +204,249 @@ def command_capture(args: argparse.Namespace) -> int:
     return 0
 
 
+def _grab_frame(config: Config, from_image: Path | None) -> tuple[Frame, list[str]]:
+    """Get a frame either from a file or from the console, plus report lines."""
+    if from_image is not None:
+        frame = read_frame(from_image)
+        return frame, [
+            f"reading {from_image}",
+            f"  {frame.width}x{frame.height}",
+        ]
+
+    from .report import connection_report
+
+    client = client_from_config(config)
+    try:
+        info = client.connect()
+        frame = client.capture()
+    finally:
+        client.close()
+    return frame, connection_report(config.vnc.host, config.vnc.port, info)
+
+
+def _snapshot_path(config: Config) -> Path:
+    """A stable name for the frame configure just looked at.
+
+    Deliberately not timestamped: `configure` is iterative, and overwriting
+    one file means `--from` always refers to the most recent attempt without
+    the operator having to copy a filename around.
+    """
+    return config.log.screenshot_dir / "configure.png"
+
+
+def command_configure(args: argparse.Namespace) -> int:
+    config = load(args)
+    setup_logging(level=config.log.level, syslog="never")
+
+    frame, header = _grab_frame(config, args.from_image)
+    for line in header:
+        print(line)
+
+    if args.from_image is None and not args.dry_run:
+        try:
+            saved = write_frame(_snapshot_path(config), frame)
+            print(f"saved snapshot -> {saved}")
+        except OSError as exc:
+            print(f"  (could not save snapshot: {exc})", file=sys.stderr)
+
+    print()
+    print("analysing")
+
+    try:
+        calibration = analyse(
+            frame,
+            config.detect.lines,
+            cell=args.cell,
+            origin=args.origin,
+            threshold=args.threshold,
+            invert=True if args.invert else None,
+        )
+    except AnalysisError as exc:
+        if exc.findings is not None:
+            for line in findings_report(exc.findings):
+                print(line)
+            binarised = binarise(
+                frame, threshold=args.threshold, invert=True if args.invert else None
+            )
+            for line in ink_sketch(binarised.mask, exc.findings):
+                print(line)
+        print(f"\nCOULD NOT CALIBRATE: {exc}", file=sys.stderr)
+        for line in failure_advice(exc.findings) if exc.findings else []:
+            print(line, file=sys.stderr)
+        return exc.exit_code
+
+    findings = calibration.findings or Findings(
+        width=frame.width,
+        height=frame.height,
+        background=calibration.background,
+        foreground=calibration.foreground,
+        threshold=calibration.threshold,
+        inverted=calibration.inverted,
+        ink_fraction=binarise(
+            frame, threshold=calibration.threshold, invert=calibration.inverted
+        ).ink_fraction,
+        contrast=contrast_ratio(calibration.foreground, calibration.background),
+    )
+    for line in findings_report(findings):
+        print(line)
+    for line in success_report(calibration, config.detect.lines):
+        print(line)
+
+    destination = args.output or config.detect.calibration
+    if args.dry_run:
+        print(f"\n--dry-run: not writing {destination}")
+        return 0
+
+    calibration.save(destination)
+    print(f"\nwrote {destination}")
+    print("detector: calibrated-glyph (exact)" if calibration.exact
+          else "detector: calibrated-glyph (approximate)")
+    return 0
+
+
+def command_test_detect(args: argparse.Namespace) -> int:
+    config = load(args)
+    setup_logging(level=config.log.level, syslog="never")
+
+    frame = read_frame(args.image)
+    calibration = Calibration.load(config.detect.calibration)
+    check_calibration(calibration, config.detect.lines)
+
+    detector = CalibratedDetector(calibration, config.detect.tolerance)
+    result = detector.detect(frame)
+
+    print(f"{args.image}: {frame.width}x{frame.height}")
+    print(f"  calibration: {config.detect.calibration}")
+    print(f"  matcher: {result.detail}")
+    if result.difference is not None:
+        print(
+            f"  region difference: {result.difference:.4%} "
+            f"(tolerance {config.detect.tolerance:.2%})"
+        )
+    if result.text:
+        print("  screen reads:")
+        for line in result.text.splitlines():
+            print(f"    | {line}")
+
+    print()
+    print("MATCH" if result.matched else "NO MATCH")
+    return 0 if result.matched else 1
+
+
+def command_run(args: argparse.Namespace) -> int:
+    import threading
+
+    from .daemon import Daemon, SystemClock
+    from .history import InterventionHistory
+    from .lock import SingleInstanceLock
+    from .probe import Prober
+
+    config = load(args)
+    setup_logging(
+        level=config.log.level,
+        syslog=config.log.syslog,
+        syslog_socket=config.defaults.syslog_socket,
+        file=config.log.file,
+    )
+
+    calibration: Calibration | None = None
+    try:
+        calibration = Calibration.load(config.detect.calibration)
+        check_calibration(calibration, config.detect.lines)
+    except CalibrationError as exc:
+        # Not fatal: the daemon still watches and still reports, it simply
+        # refuses to press anything. Exiting would leave the host unwatched
+        # as well as unrescued.
+        print(f"boot-err-shim: {exc}", file=sys.stderr)
+        calibration = None
+
+    if calibration is not None:
+        detector = CalibratedDetector(calibration, config.detect.tolerance)
+    else:
+        from .daemon import DetectResult as _DetectResult
+
+        def detector(frame):  # type: ignore[misc]
+            return _DetectResult(matched=False, detail="uncalibrated")
+
+    prober = Prober(config.ping.command, config.ping.timeout)
+    clock = SystemClock()
+
+    def console_factory():
+        client = client_from_config(config)
+        client.connect()
+        return client
+
+    def frame_writer(frame, label):
+        return _write_ring(config, frame, label)
+
+    stop = clock.stop
+    _install_signal_handlers(stop, threading)
+
+    with SingleInstanceLock(config.lock_path):
+        daemon = Daemon(
+            config,
+            probe=prober.probe,
+            console_factory=console_factory,
+            detector=detector,
+            clock=clock,
+            history=InterventionHistory.load(config.history_path),
+            calibrated=calibration is not None,
+            no_act=args.no_act,
+            frame_writer=frame_writer,
+        )
+        if args.once:
+            daemon.step()
+        else:
+            daemon.run()
+    return 0
+
+
+def _install_signal_handlers(stop, threading_module) -> None:
+    import signal
+
+    def handle(signum, _frame):
+        stop.set()
+
+    for name in ("SIGTERM", "SIGINT"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), handle)
+
+
+def _write_ring(config: Config, frame: Frame, label: str) -> Path:
+    """Write a frame into the snapshot ring buffer, evicting the oldest."""
+    directory = config.log.screenshot_dir
+    directory.mkdir(parents=True, exist_ok=True)
+
+    import time
+
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    path = directory / f"{stamp}-{label}.png"
+    # A second capture inside the same second must not clobber the first.
+    suffix = 1
+    while path.exists():
+        path = directory / f"{stamp}-{suffix}-{label}.png"
+        suffix += 1
+
+    write_frame(path, frame)
+
+    existing = sorted(
+        (p for p in directory.glob("*.png") if p.name != "configure.png"),
+        key=lambda p: p.name,
+    )
+    for stale in existing[: max(0, len(existing) - config.log.screenshot_keep)]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    return path
+
+
 COMMANDS = {
     "check-config": command_check_config,
     "capture": command_capture,
+    "configure": command_configure,
+    "test-detect": command_test_detect,
+    "run": command_run,
 }
 
 

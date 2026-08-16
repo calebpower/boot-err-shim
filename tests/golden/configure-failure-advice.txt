@@ -1,0 +1,8 @@
+
+What to try:
+  - Check the saved snapshot: does it show the expected message?
+  - If detect.text does not match the screen word for word, fix it;
+    matching ignores case and spacing but not wording.
+  - Force the geometry with --cell WxH and --origin X,Y.
+  - Re-run against the snapshot with --from, no reboot needed.
+  - If the console is scaled or antialiased, set engine = "ocr".

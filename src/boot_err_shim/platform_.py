@@ -113,7 +113,20 @@ def platform_defaults(system: str | None = None) -> PlatformDefaults:
         )
 
     if system == "Windows":
-        # Development only. Windows ping: -n count, -w timeout in ms.
+        # Development only, and not merely because nobody deploys this here:
+        # Windows ping exits 0 for "Destination net unreachable", because it
+        # did receive an ICMP reply -- just not the one you wanted. So an
+        # unreachable host reads as up, and the daemon never leaves the happy
+        # path.
+        #
+        # Left unfixed on purpose. Parsing ping's human-readable output to
+        # work around it would mean locale-dependent string matching in the
+        # one code path where a wrong answer sends keystrokes to a console,
+        # and it would only ever run on a platform this program does not
+        # target. FreeBSD and iputils both report unreachable as a nonzero
+        # exit, which is what the daemon relies on.
+        #
+        # Windows ping: -n count, -w timeout in milliseconds.
         return PlatformDefaults(
             system=system,
             config_path=_windows_state_dir() / CONFIG_FILE_NAME,

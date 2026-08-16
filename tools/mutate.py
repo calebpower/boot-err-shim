@@ -454,6 +454,81 @@ MUTANTS: list[Mutant] = [
         "would desynchronise the stream rather than fail cleanly.",
         suites=("tests.fake.test_rfb_client",),
     ),
+    # -- step 4: calibration and detection ----------------------------
+    Mutant(
+        name="near-region-match-accepted-uncorroborated",
+        path="src/boot_err_shim/detect.py",
+        old="        if region.matched and region.difference == 0.0:",
+        new="        if region.matched:",
+        tier="1 detect",
+        rationale="The false positive this design is built to avoid. One "
+        "wrong character is about 0.2% of the region, so any tolerance "
+        "loose enough for a speck of dust also accepts 'press N' as "
+        "'press Y'.",
+        suites=("tests.unit.test_detect",),
+    ),
+    Mutant(
+        name="region-matcher-ignores-resolution-change",
+        path="src/boot_err_shim/detect.py",
+        old="        if (frame.width, frame.height) != (calibration.width, calibration.height):",
+        new="        if False:",
+        tier="1 detect",
+        rationale="After a video mode change the stored rectangle refers to a "
+        "different part of the screen entirely.",
+        suites=("tests.unit.test_detect",),
+    ),
+    Mutant(
+        name="glyph-match-needs-only-one-line",
+        path="src/boot_err_shim/detect.py",
+        old="        if all(line in haystack for line in wanted):",
+        new="        if any(line in haystack for line in wanted):",
+        tier="1 detect",
+        rationale="'Please contact technical support to resolve this issue' "
+        "appears in other Dell firmware messages; matching on one line "
+        "would fire on them.",
+        suites=("tests.unit.test_detect",),
+    ),
+    Mutant(
+        name="calibration-accepts-approximate",
+        path="src/boot_err_shim/calibrate.py",
+        old="            if candidate.delta == 0:\n                calibration = _build(",
+        new="            if 0 <= candidate.delta <= 40:\n                calibration = _build(",
+        tier="1 calibrate",
+        rationale="Settling for a nearly-right grid produces a calibration "
+        "that cannot reproduce the screen it came from, and then "
+        "authorises keystrokes on that basis.",
+        suites=("tests.unit.test_calibrate",),
+    ),
+    Mutant(
+        name="stale-calibration-not-detected",
+        path="src/boot_err_shim/calibrate.py",
+        old="    if not calibration.matches_text(lines):",
+        new="    if False:",
+        tier="1 calibrate",
+        rationale="Changing detect.text would leave the old region mask in "
+        "force, so the daemon would match the previous wording.",
+        suites=("tests.unit.test_calibrate",),
+    ),
+    Mutant(
+        name="normalise-is-case-sensitive",
+        path="src/boot_err_shim/calibrate.py",
+        old='    return " ".join(text.split()).casefold()',
+        new='    return " ".join(text.split())',
+        tier="1 calibrate",
+        rationale="Matching would depend on the operator reproducing the "
+        "console's capitalisation exactly.",
+        suites=("tests.unit.test_calibrate", "tests.unit.test_detect"),
+    ),
+    Mutant(
+        name="contrast-floor-never-warns",
+        path="src/boot_err_shim/report.py",
+        old="CONTRAST_FLOOR = 3.0",
+        new="CONTRAST_FLOOR = 0.0",
+        tier="2 conformance",
+        rationale="A dim console makes binarisation unreliable, and that is "
+        "not something an operator can judge by looking at a PNG.",
+        suites=("tests.conformance.test_report",),
+    ),
     Mutant(
         name="log-newline-not-escaped",
         path="src/boot_err_shim/log.py",

@@ -1,0 +1,5 @@
+  640x400, ink 2.3%
+  #c0c0c0 on #000000, contrast 11.5:1, threshold 96
+  text rows found: 3
+  grid: 9x16 cells
+  origin: (71, 207)
