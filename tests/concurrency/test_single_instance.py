@@ -66,13 +66,22 @@ screenshot_dir = "{snapshots}"
 syslog         = "never"
 """
 
-#: A command that cannot succeed, so "host is down" is deterministic on every
-#: platform rather than depending on how the local ping reports unreachable.
-ALWAYS_DOWN = '["python", "-c", "import sys; sys.exit(1)", "{host}"]'
-
-
 def toml_path(path: Path) -> str:
     return str(path).replace("\\", "/")
+
+
+#: A ping command that cannot succeed, so "the host is down" is deterministic
+#: rather than depending on how the local ping reports an unroutable address.
+#:
+#: Spelled with sys.executable rather than "python": Ubuntu 26.04 ships only
+#: python3, so a hardcoded "python" makes the probe fail to execute at all,
+#: which is a different code path (ProbeError) from the one under test. Note
+#: `{host}` survives into the config verbatim -- str.format does not recurse
+#: into substituted values -- which config validation requires.
+ALWAYS_DOWN = (
+    f'["{toml_path(Path(sys.executable))}", "-c", '
+    '"import sys; sys.exit(1)", "{host}"]'
+)
 
 
 class ConsoleFixture(unittest.TestCase):

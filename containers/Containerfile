@@ -1,0 +1,53 @@
+# Tier 6: the full stack, against software we did not write.
+#
+# Ubuntu 26.04 LTS because that is a stated deployment target, so the stage
+# runner is exercising the real thing rather than a stand-in.
+#
+# The point of this image is TigerVNC. Our client validated only against our
+# own fake server proves very little -- both halves would agree just as
+# happily on a shared misreading of the protocol. TigerVNC is an
+# implementation nobody here wrote, and it is the oracle this tier exists for.
+#
+# xfonts-base likewise: -misc-fixed is a real bitmap console font we did not
+# generate, so calibration is recovering glyphs it has never seen rather than
+# rediscovering the ones our own renderer drew.
+FROM docker.io/library/ubuntu:26.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+        python3 \
+        tigervnc-standalone-server \
+        tigervnc-tools \
+        xterm \
+        xfonts-base \
+        xfonts-utils \
+        x11-utils \
+        xdotool \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        iputils-ping \
+        openssl \
+        systemd \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Start hostile, per the methodology. A C locale with an ASCII filesystem
+# encoding is the environment most likely to expose an unmarked text
+# assumption, and the configured message contains an apostrophe that arrives
+# from a TOML file.
+ENV LANG=C
+ENV LC_ALL=C
+ENV PYTHONUTF8=0
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# The daemon must run unprivileged. Running these stages as root would hide a
+# permissions mistake that only shows up on a real deployment.
+RUN useradd --create-home --shell /bin/sh shim
+WORKDIR /work
+
+# The image is the environment; the code arrives as a mount at run time and is
+# copied to /work by the entry point. That keeps the slow package install out
+# of the edit loop, and guarantees a stage can never write to the host tree.
+ENTRYPOINT ["/bin/sh", "-c", "cp -r /src/. /work/ && exec sh /work/containers/stages.sh \"$@\"", "--"]
+CMD ["all"]
