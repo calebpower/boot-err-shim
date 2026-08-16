@@ -504,6 +504,93 @@ stage_loop() {
     stop_console
 }
 
+stage_shared_console() {
+    banner "shared-console: somebody else is watching at the same time"
+    start_vnc
+    show_message
+    write_config /tmp/shared.conf
+    shim configure -c /tmp/shared.conf > /dev/null 2>&1
+    check $? "calibrated with no other viewer attached"
+
+    # A second viewer, holding a connection open for the duration. Our own
+    # client stands in for a human's vncviewer: what matters is that another
+    # RFB session exists, not what software is on the other end.
+    python3 - <<'VIEWER' > /tmp/viewer.log 2>&1 &
+import sys, time
+sys.path.insert(0, "/work/src")
+from boot_err_shim.rfb import RFBClient
+client = RFBClient(host="127.0.0.1", port=5901, password="secret12",
+                   connect_timeout=10, read_timeout=30)
+client.connect()
+print("viewer attached", flush=True)
+client.capture()
+print("viewer captured", flush=True)
+time.sleep(120)
+VIEWER
+    viewer=$!
+    sleep 5
+
+    if grep -q "viewer attached" /tmp/viewer.log; then
+        ok "a second viewer is connected"
+    else
+        sed 's/^/      /' /tmp/viewer.log
+        fail "the second viewer could not attach"
+        kill "$viewer" 2>/dev/null || true
+        stop_console
+        return
+    fi
+
+    before=$(keypress_count)
+    shim run -c /tmp/shared.conf --once > /tmp/shared-run.log 2>&1
+    check $? "the daemon completed a cycle alongside another viewer"
+
+    grep -q "detect.match" /tmp/shared-run.log \
+        && ok "it still detected the prompt" \
+        || fail "detection failed while another viewer was attached"
+
+    sleep 2
+    [ "$(keypress_count)" != "$before" ] \
+        && ok "the console received the keystroke" \
+        || fail "no keystroke arrived while sharing"
+
+    # The other viewer must survive us: disconnecting somebody mid-diagnosis
+    # would be its own kind of outage.
+    if kill -0 "$viewer" 2>/dev/null; then
+        ok "the other viewer was not disconnected"
+    else
+        sed 's/^/      /' /tmp/viewer.log
+        fail "our connection killed the other viewer"
+    fi
+    kill "$viewer" 2>/dev/null || true
+    wait "$viewer" 2>/dev/null || true
+
+    # Now the interesting half: a human's mouse pointer sitting over the
+    # message. Xvnc paints the cursor into the framebuffer, so it changes the
+    # very pixels the region matcher compares.
+    show_message                       # reset the console and the recorder
+    before=$(keypress_count)
+    DISPLAY=:1 xdotool mousemove 200 20 2>/dev/null || true
+    sleep 2
+
+    shim run -c /tmp/shared.conf --once > /tmp/cursor-run.log 2>&1
+    check $? "a cycle completed with a pointer over the message"
+
+    if grep -q "key.pressed" /tmp/cursor-run.log; then
+        ok "the pointer did not stop it recognising the prompt"
+    else
+        # Also acceptable, and the safer direction: refuse rather than guess.
+        ok "it declined to act with the screen obscured (fail-safe)"
+        grep -q "detect.no_match" /tmp/cursor-run.log \
+            && ok "and recorded why" \
+            || fail "it declined without saying why"
+    fi
+
+    printf '  pointer over message: %s\n' \
+        "$(grep -o 'detect\.[a-z_]*' /tmp/cursor-run.log | tail -1)"
+
+    stop_console
+}
+
 stage_escalation() {
     banner "escalation: a repeatedly failing controller pages somebody"
     start_vnc
@@ -915,7 +1002,7 @@ stage_regressions() {
 
 # -- driver ------------------------------------------------------------
 
-ALL_STAGES="vectors handshake auth tls capture calibrate detect loop ring-buffer from-snapshot uncalibrated escalation concurrency ocr hostile-text service-linux regressions"
+ALL_STAGES="vectors handshake auth tls capture calibrate detect loop ring-buffer from-snapshot uncalibrated shared-console escalation concurrency ocr hostile-text service-linux regressions"
 
 run_stage() {
     case "$1" in
@@ -929,6 +1016,7 @@ run_stage() {
         loop)           stage_loop ;;
         ring-buffer)    stage_ring_buffer ;;
         from-snapshot)  stage_from_snapshot ;;
+        shared-console) stage_shared_console ;;
         escalation)     stage_escalation ;;
         uncalibrated)   stage_uncalibrated ;;
         concurrency)    stage_concurrency ;;
