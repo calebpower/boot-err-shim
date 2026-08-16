@@ -41,7 +41,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .bitmap import Band, Binarisation, Bitmap, binarise, find_bands
-from .errors import AnalysisError, CalibrationError, CalibrationStale
+from .errors import (
+    AnalysisError,
+    CalibrationError,
+    CalibrationNotFound,
+    CalibrationStale,
+)
 from .frame import Frame
 from .lock import atomic_write_text
 
@@ -186,6 +191,15 @@ class Calibration:
         path = Path(path)
         try:
             raw = path.read_bytes()
+        except FileNotFoundError as exc:
+            # Distinguished from an unreadable or corrupt one, because the
+            # advice differs: "you have not calibrated yet" versus "your
+            # calibration is damaged". Both end in `configure`, but only one
+            # of them means something went wrong.
+            raise CalibrationNotFound(
+                f"{path}: no calibration yet. Reboot the host, let it stop at "
+                f"the error, then run: boot-err-shim configure"
+            ) from exc
         except OSError as exc:
             raise CalibrationError(f"{path}: cannot read: {exc}") from exc
         try:

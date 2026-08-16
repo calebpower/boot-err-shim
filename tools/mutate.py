@@ -686,6 +686,48 @@ MUTANTS: list[Mutant] = [
         suites=("tests.unit.test_cli",),
     ),
     Mutant(
+        name="missing-calibration-not-distinguished",
+        path="src/boot_err_shim/calibrate.py",
+        old="        except FileNotFoundError as exc:",
+        new="        except _NeverRaised as exc:",
+        tier="1 calibrate + 1 cli",
+        rationale="A never-calibrated host and a corrupt calibration need "
+        "different advice, and the error class promising that distinction "
+        "went years without ever being raised.",
+        suites=("tests.unit.test_cli", "tests.unit.test_calibrate"),
+    ),
+    Mutant(
+        name="binarise-ignores-the-luminance-gap",
+        path="src/boot_err_shim/bitmap.py",
+        old="        if abs(luma(colour) - background_luma) >= 32:",
+        new="        if True:",
+        tier="1 bitmap",
+        rationale="Without the gap, an anti-aliasing shade one value off the "
+        "background is promoted to foreground and the threshold lands "
+        "between two colours that are visually identical.",
+        suites=("tests.unit.test_bitmap",),
+    ),
+    Mutant(
+        name="bands-lose-the-final-row",
+        path="src/boot_err_shim/bitmap.py",
+        old="    for y, ink in enumerate(profile + [0]):",
+        new="    for y, ink in enumerate(profile):",
+        tier="1 bitmap",
+        rationale="A message ending on the last row of the screen would never "
+        "have its band closed, so the line would simply not exist.",
+        suites=("tests.unit.test_bitmap", "tests.unit.test_calibrate"),
+    ),
+    Mutant(
+        name="mismatched-bitmaps-compare-equal",
+        path="src/boot_err_shim/bitmap.py",
+        old="            return max(self.width * self.height, other.width * other.height)",
+        new="            return 0",
+        tier="1 bitmap",
+        rationale="A region of the wrong size would compare as a perfect "
+        "match, which is a false positive on the path that presses keys.",
+        suites=("tests.unit.test_bitmap", "tests.unit.test_detect"),
+    ),
+    Mutant(
         name="log-newline-not-escaped",
         path="src/boot_err_shim/log.py",
         old='            .replace("\\n", "\\\\n")',

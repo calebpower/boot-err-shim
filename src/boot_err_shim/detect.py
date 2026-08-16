@@ -177,9 +177,3 @@ class CalibratedDetector:
             y += cell_height
 
         return "\n".join(lines)
-
-
-def build_detector(
-    calibration: Calibration, tolerance: float
-) -> CalibratedDetector:
-    return CalibratedDetector(calibration, tolerance)

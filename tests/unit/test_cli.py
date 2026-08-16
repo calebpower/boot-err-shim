@@ -397,6 +397,45 @@ class TestShowCalibration(CliFixture):
         code, _out, _err = run_cli(["show-calibration", "-c", str(self.config_path)])
         self.assertEqual(code, CalibrationError.exit_code)
 
+    def test_never_calibrated_is_distinguished_from_corrupt(self) -> None:
+        """Both end in `configure`; only one of them is a fault.
+
+        The class existed and was never raised, so the program named a
+        distinction it did not actually make -- which reads as a guarantee to
+        anyone catching it.
+        """
+        from boot_err_shim.errors import CalibrationNotFound
+
+        self.calibration_path.unlink()
+        with self.assertRaises(CalibrationNotFound) as caught:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                cli.main(
+                    ["--debug", "show-calibration", "-c", str(self.config_path)]
+                )
+        message = str(caught.exception)
+        self.assertIn("no calibration yet", message)
+        self.assertIn("configure", message)
+
+    def test_a_corrupt_calibration_is_not_reported_as_missing(self) -> None:
+        from boot_err_shim.errors import CalibrationError, CalibrationNotFound
+
+        self.calibration_path.write_text("this is not toml {{{", encoding="utf-8")
+        with self.assertRaises(CalibrationError) as caught:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                cli.main(
+                    ["--debug", "show-calibration", "-c", str(self.config_path)]
+                )
+        self.assertNotIsInstance(caught.exception, CalibrationNotFound)
+        self.assertIn("not valid TOML", str(caught.exception))
+
+    def test_a_missing_calibration_does_not_stop_the_daemon_watching(self) -> None:
+        # It refuses to press keys, but it must still watch: exiting would
+        # leave the host unwatched as well as unrescued.
+        self.calibration_path.unlink()
+        code, _out, err = run_cli(["check-config", "-c", str(self.config_path)])
+        self.assertEqual(code, 0)
+        self.assertIn("configure", err)
+
 
 class TestSnapshotRingBuffer(CliFixture):
     """Eviction. Untested until now, and it runs once a minute forever."""

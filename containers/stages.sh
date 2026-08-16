@@ -497,6 +497,54 @@ stage_loop() {
     stop_console
 }
 
+stage_uncalibrated() {
+    banner "uncalibrated: the daemon watches but refuses to act"
+    start_vnc
+    show_message
+    write_config /tmp/uncal.conf
+    rm -f "$STATE/calibration.toml"
+
+    before=$(keypress_count)
+    shim run -c /tmp/uncal.conf --once > /tmp/uncal.log 2>&1
+    check $? "a cycle completed without a calibration"
+
+    grep -q "no calibration yet" /tmp/uncal.log \
+        && ok "it says it has never been calibrated, not that one is broken" \
+        || fail "the message does not distinguish never-calibrated from corrupt"
+
+    grep -q "daemon.uncalibrated\|key.refused\|uncalibrated" /tmp/uncal.log \
+        && ok "the refusal is logged" \
+        || fail "the refusal was not logged"
+
+    sleep 2
+    [ "$(keypress_count)" = "$before" ] \
+        && ok "the console received nothing" \
+        || fail "a key was pressed without a calibration"
+
+    # And it must be a refusal to act, not a refusal to run: the host still
+    # needs watching even when we cannot rescue it.
+    grep -q "ping.down" /tmp/uncal.log \
+        && ok "it still probed the host" \
+        || fail "it stopped watching entirely"
+
+    # A corrupt calibration must read differently from an absent one.
+    printf 'this is not toml {{{\n' > "$STATE/calibration.toml"
+    shim run -c /tmp/uncal.conf --once > /tmp/corrupt.log 2>&1
+    if grep -q "no calibration yet" /tmp/corrupt.log; then
+        sed 's/^/      /' /tmp/corrupt.log
+        fail "a corrupt calibration was reported as a missing one"
+    else
+        ok "a corrupt calibration reports differently from a missing one"
+    fi
+
+    sleep 2
+    [ "$(keypress_count)" = "$before" ] \
+        && ok "still nothing pressed with a corrupt calibration" \
+        || fail "a key was pressed with a corrupt calibration"
+
+    stop_console
+}
+
 stage_ring_buffer() {
     banner "ring-buffer: snapshots stay bounded over many cycles"
     start_vnc
@@ -749,7 +797,7 @@ stage_regressions() {
 
 # -- driver ------------------------------------------------------------
 
-ALL_STAGES="vectors handshake auth tls capture calibrate detect loop ring-buffer concurrency ocr hostile-text service-linux regressions"
+ALL_STAGES="vectors handshake auth tls capture calibrate detect loop ring-buffer uncalibrated concurrency ocr hostile-text service-linux regressions"
 
 run_stage() {
     case "$1" in
@@ -762,6 +810,7 @@ run_stage() {
         detect)         stage_detect ;;
         loop)           stage_loop ;;
         ring-buffer)    stage_ring_buffer ;;
+        uncalibrated)   stage_uncalibrated ;;
         concurrency)    stage_concurrency ;;
         ocr)            stage_ocr ;;
         hostile-text)   stage_hostile_text ;;
