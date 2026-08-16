@@ -7,6 +7,15 @@
 # Unknown keys are a hard error, not a warning. A typo you do not notice means
 # a setting you believe is in force but is not.
 
+[state]
+# Where the calibration, the intervention history, the lock file and the
+# snapshot ring buffer live. Platform-detected: /var/db/boot-err-shim on
+# FreeBSD, /var/lib/boot-err-shim on Linux. The service user must be able to
+# write here.
+#
+# Set this per instance if you run more than one daemon on a machine.
+# dir = "/var/lib/boot-err-shim"
+
 [target]
 # The host to watch. This is the machine with the failing controller, not the
 # iDRAC -- we ping the host and look at its console through the iDRAC.

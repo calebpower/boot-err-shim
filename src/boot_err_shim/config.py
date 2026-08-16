@@ -15,6 +15,7 @@ interval at three in the morning.
 
 from __future__ import annotations
 
+import math
 import os
 import stat
 import tomllib
@@ -51,6 +52,11 @@ VALID_SYSLOG = ("auto", "always", "never")
 
 _DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
+#: Thirty days. Not a limit anybody should reach -- it exists so that a
+#: fat-fingered `interval = 999999999999` is reported rather than silently
+#: parking the daemon until long after the hardware has been replaced.
+MAX_DURATION_SECONDS = 30 * 86400
+
 
 def parse_duration(value: Any, where: str) -> int:
     """Accept ``90``, ``90.0``, ``"90"``, ``"90s"``, ``"2m"``, ``"1h"`` -> seconds."""
@@ -59,6 +65,8 @@ def parse_duration(value: Any, where: str) -> int:
     if isinstance(value, int):
         seconds = value
     elif isinstance(value, float):
+        if not math.isfinite(value):
+            raise ConfigError(f"{where}: duration must be finite, got {value!r}")
         if value != int(value):
             raise ConfigError(f"{where}: duration must be whole seconds, got {value!r}")
         seconds = int(value)
@@ -71,14 +79,25 @@ def parse_duration(value: Any, where: str) -> int:
             unit = _DURATION_UNITS[text[-1]]
             text = text[:-1].strip()
         try:
-            seconds = int(float(text) * unit)
+            parsed = float(text)
         except ValueError:
             raise ConfigError(f"{where}: cannot parse duration {value!r}") from None
+        # "1e400" parses as inf and "nan" as NaN; int() of either blows up
+        # with OverflowError or ValueError rather than anything a caller
+        # would think to catch.
+        if not math.isfinite(parsed):
+            raise ConfigError(f"{where}: duration must be finite, got {value!r}")
+        seconds = int(parsed * unit)
     else:
         raise ConfigError(f"{where}: expected a duration, got {type(value).__name__}")
 
     if seconds <= 0:
         raise ConfigError(f"{where}: duration must be positive, got {value!r}")
+    if seconds > MAX_DURATION_SECONDS:
+        raise ConfigError(
+            f"{where}: duration {value!r} exceeds the {MAX_DURATION_SECONDS}s "
+            "(30 day) maximum; check for a stray digit"
+        )
     return seconds
 
 
@@ -265,6 +284,11 @@ class LogConfig:
     screenshot_keep: int
 
 
+def slug(value: str) -> str:
+    """Make a string safe to embed in a filename, on any filesystem."""
+    return "".join(char if char.isalnum() or char in "-." else "_" for char in value)
+
+
 @dataclass(frozen=True)
 class Config:
     target: TargetConfig
@@ -283,11 +307,21 @@ class Config:
 
     @property
     def history_path(self) -> Path:
-        return self.state_dir / "history.json"
+        """Per target host, so two instances keep separate intervention counts."""
+        return self.state_dir / f"{slug(self.target.host)}.history.json"
 
     @property
     def lock_path(self) -> Path:
-        return self.state_dir / "boot-err-shim.lock"
+        """Per console, because the console is the resource being protected.
+
+        Keyed on the VNC endpoint rather than on the config file or the
+        machine. The invariant is "two daemons must not both press a key at
+        one console", so the lock has to name that console: two instances
+        watching two different hosts should run happily side by side, and two
+        instances pointed at the same iDRAC must not, whether or not they were
+        started from the same config file.
+        """
+        return self.state_dir / f"{slug(self.vnc.host)}-{self.vnc.port}.lock"
 
 
 def _check_permissions(path: Path, has_password: bool) -> None:
@@ -318,6 +352,10 @@ def parse_config(
     """Validate a parsed TOML mapping into a :class:`Config`."""
     plat = defaults or platform_defaults()
     root = _Table(data, "")
+
+    state_t = root.table("state")
+    state_dir = state_t.path("dir", plat.state_dir)
+    state_t.finish()
 
     target_t = root.table("target")
     host = target_t.str_("host")
@@ -366,7 +404,7 @@ def parse_config(
         key=key,
         keysym=resolve_keysym(key),
         engine=detect_t.choice("engine", "calibrated", VALID_ENGINES),
-        calibration=detect_t.path("calibration", plat.calibration_path),
+        calibration=detect_t.path("calibration", state_dir / "calibration.toml"),
         tolerance=detect_t.float_("tolerance", 0.02, 0.0, 1.0),
     )
     detect_t.finish()
@@ -387,7 +425,7 @@ def parse_config(
         level=log_t.choice("level", "INFO", VALID_LEVELS),
         syslog=log_t.choice("syslog", "auto", VALID_SYSLOG),
         file=log_t.opt_path("file"),
-        screenshot_dir=log_t.path("screenshot_dir", plat.snapshot_dir),
+        screenshot_dir=log_t.path("screenshot_dir", state_dir / "snapshots"),
         screenshot_keep=log_t.int_("screenshot_keep", 20, 1, 100000),
     )
     log_t.finish()
@@ -401,7 +439,7 @@ def parse_config(
         detect=detect,
         recovery=recovery,
         log=log,
-        state_dir=plat.state_dir,
+        state_dir=state_dir,
         source_path=source_path,
         defaults=plat,
     )

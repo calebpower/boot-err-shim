@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from boot_err_shim.config import (
+    MAX_DURATION_SECONDS,
     _check_permissions,
     load_config,
     parse_config,
@@ -84,7 +85,81 @@ class TestMinimalAndDefaults(unittest.TestCase):
         self.assertEqual(
             config.log.screenshot_dir, Path("/var/lib/boot-err-shim/snapshots")
         )
-        self.assertEqual(config.history_path, Path("/var/lib/boot-err-shim/history.json"))
+
+    def test_the_state_directory_is_configurable(self) -> None:
+        # Found by the concurrency tier: with the state directory fixed to a
+        # platform default, the lock file could not be pointed anywhere else,
+        # so a second instance locked a path nobody else was using.
+        config = build('\n[state]\ndir = "/srv/shim"\n')
+        self.assertEqual(config.state_dir, Path("/srv/shim"))
+        self.assertEqual(config.detect.calibration, Path("/srv/shim/calibration.toml"))
+        self.assertEqual(config.log.screenshot_dir, Path("/srv/shim/snapshots"))
+        self.assertEqual(config.lock_path.parent, Path("/srv/shim"))
+        self.assertEqual(config.history_path.parent, Path("/srv/shim"))
+
+    def test_explicit_paths_still_override_the_state_directory(self) -> None:
+        config = build(
+            '\n[state]\ndir = "/srv/shim"\n'
+            '\n[detect]\ncalibration = "/etc/cal.toml"\n'
+            '\n[log]\nscreenshot_dir = "/var/tmp/shots"\n'
+        )
+        self.assertEqual(config.detect.calibration, Path("/etc/cal.toml"))
+        self.assertEqual(config.log.screenshot_dir, Path("/var/tmp/shots"))
+
+
+class TestPerInstancePaths(unittest.TestCase):
+    """The lock names the console; the history names the target.
+
+    Both were a single fixed filename until the concurrency tier showed what
+    that costs: two daemons watching different hosts on one machine would
+    contend for one lock and share one intervention count.
+    """
+
+    def test_the_lock_is_named_after_the_console(self) -> None:
+        # The console is the resource being protected -- two daemons must not
+        # both press a key at the same iDRAC, whatever they are watching.
+        config = build()
+        self.assertEqual(
+            config.lock_path, Path("/var/lib/boot-err-shim/10.0.0.51-5901.lock")
+        )
+
+    def test_different_consoles_get_different_locks(self) -> None:
+        first = build('\n[vnc]\nhost = "10.0.0.51"\n')
+        second = build('\n[vnc]\nhost = "10.0.0.52"\n')
+        self.assertNotEqual(first.lock_path, second.lock_path)
+
+    def test_the_same_console_on_a_different_port_is_a_different_lock(self) -> None:
+        first = build("\n[vnc]\nport = 5901\n")
+        second = build("\n[vnc]\nport = 5902\n")
+        self.assertNotEqual(first.lock_path, second.lock_path)
+
+    def test_the_same_console_from_two_configs_shares_one_lock(self) -> None:
+        # The case that matters: two different config files aimed at one
+        # iDRAC must still be mutually exclusive.
+        first = build('\n[target]\nhost = "10.0.0.60"\n')
+        second = build('\n[target]\nhost = "10.0.0.61"\n')
+        self.assertEqual(first.lock_path, second.lock_path)
+
+    def test_the_history_is_named_after_the_target(self) -> None:
+        config = build()
+        self.assertEqual(
+            config.history_path,
+            Path("/var/lib/boot-err-shim/10.0.0.50.history.json"),
+        )
+
+    def test_different_targets_get_different_histories(self) -> None:
+        first = build('\n[target]\nhost = "a.example"\n')
+        second = build('\n[target]\nhost = "b.example"\n')
+        self.assertNotEqual(first.history_path, second.history_path)
+
+    def test_hostnames_are_made_safe_for_a_filename(self) -> None:
+        # IPv6 literals and anything else with separators in it must not
+        # produce a path with directories in the middle of it.
+        config = build('\n[vnc]\nhost = "fe80::1%eth0"\n')
+        self.assertEqual(config.lock_path.parent, config.state_dir)
+        self.assertNotIn("/", config.lock_path.name)
+        self.assertNotIn("\\", config.lock_path.name)
+        self.assertNotIn(":", config.lock_path.name)
 
     def test_password_defaults_to_absent_not_empty(self) -> None:
         # None and "" mean different things to the RFB handshake: no password
@@ -210,6 +285,36 @@ class TestDurations(unittest.TestCase):
     def test_non_integral_float_is_rejected(self) -> None:
         with self.assertRaises(ConfigError):
             parse_duration(1.5, "x")
+
+    def test_infinity_is_rejected(self) -> None:
+        # Found by the fuzz tier: float("1e400") is inf, and int(inf) raises
+        # OverflowError, which is not a ConfigError and so escaped the CLI's
+        # error handling entirely as a traceback.
+        for value in ("1e400", "-1e400", "inf", "-inf", "Infinity"):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                parse_duration(value, "x")
+
+    def test_nan_is_rejected(self) -> None:
+        for value in ("nan", "NaN", "-nan"):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                parse_duration(value, "x")
+
+    def test_non_finite_floats_are_rejected(self) -> None:
+        for value in (float("inf"), float("-inf"), float("nan")):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                parse_duration(value, "x")
+
+    def test_absurdly_long_durations_are_rejected(self) -> None:
+        # A stray digit should be reported, not silently park the daemon
+        # until after the hardware has been replaced.
+        for value in (999999999999999999999, "9999d", MAX_DURATION_SECONDS + 1):
+            with self.subTest(value=value), self.assertRaises(ConfigError):
+                parse_duration(value, "x")
+
+    def test_the_maximum_itself_is_accepted(self) -> None:
+        self.assertEqual(
+            parse_duration(MAX_DURATION_SECONDS, "x"), MAX_DURATION_SECONDS
+        )
 
     def test_error_names_the_setting(self) -> None:
         with self.assertRaises(ConfigError) as caught:

@@ -529,6 +529,93 @@ MUTANTS: list[Mutant] = [
         "not something an operator can judge by looking at a PNG.",
         suites=("tests.conformance.test_report",),
     ),
+    # -- step 5: found by the fuzz and concurrency tiers ---------------
+    Mutant(
+        name="duration-accepts-infinity",
+        path="src/boot_err_shim/config.py",
+        old="        if not math.isfinite(parsed):\n"
+        '            raise ConfigError(f"{where}: duration must be finite, got {value!r}")\n'
+        "        seconds = int(parsed * unit)",
+        new="        seconds = int(parsed * unit)",
+        tier="1 config + 7 fuzz",
+        rationale='Found by fuzzing: "1e400" parses as inf, and int(inf) '
+        "raises OverflowError -- untyped, so it escaped the CLI's error "
+        "handling as a traceback.",
+        suites=("tests.unit.test_config", "tests.fuzz.test_fuzz_config"),
+    ),
+    Mutant(
+        name="duration-has-no-upper-bound",
+        path="src/boot_err_shim/config.py",
+        old="    if seconds > MAX_DURATION_SECONDS:",
+        new="    if False:",
+        tier="1 config",
+        rationale="A stray digit would park the daemon until long after the "
+        "hardware has been replaced, silently.",
+        suites=("tests.unit.test_config",),
+    ),
+    Mutant(
+        name="lock-is-shared-across-consoles",
+        path="src/boot_err_shim/config.py",
+        old='        return self.state_dir / f"{slug(self.vnc.host)}-{self.vnc.port}.lock"',
+        new='        return self.state_dir / "boot-err-shim.lock"',
+        tier="1 config + 8 concurrency",
+        rationale="A single global lock name stops two daemons watching two "
+        "different hosts from running side by side.",
+        suites=("tests.unit.test_config",),
+    ),
+    Mutant(
+        name="lock-is-per-target-not-per-console",
+        path="src/boot_err_shim/config.py",
+        old='        return self.state_dir / f"{slug(self.vnc.host)}-{self.vnc.port}.lock"',
+        new='        return self.state_dir / f"{slug(self.target.host)}.lock"',
+        tier="1 config",
+        rationale="Two configs watching different hosts through one iDRAC "
+        "would both press keys at the same console.",
+        suites=("tests.unit.test_config",),
+    ),
+    Mutant(
+        name="history-is-shared-across-targets",
+        path="src/boot_err_shim/config.py",
+        old='        return self.state_dir / f"{slug(self.target.host)}.history.json"',
+        new='        return self.state_dir / "history.json"',
+        tier="1 config",
+        rationale="Two daemons would pool their intervention counts and warn "
+        "about the wrong controller.",
+        suites=("tests.unit.test_config",),
+    ),
+    Mutant(
+        name="hostnames-not-sanitised-into-filenames",
+        path="src/boot_err_shim/config.py",
+        old='    return "".join(char if char.isalnum() or char in "-." else "_" for char in value)',
+        new="    return value",
+        tier="1 config",
+        rationale="An IPv6 literal or a hostname with a slash would put "
+        "directory separators in the middle of the lock path.",
+        suites=("tests.unit.test_config",),
+    ),
+    Mutant(
+        name="state-directory-not-configurable",
+        path="src/boot_err_shim/config.py",
+        old='    state_dir = state_t.path("dir", plat.state_dir)',
+        new="    state_dir = plat.state_dir",
+        tier="8 concurrency",
+        rationale="Found by the concurrency tier: with the state directory "
+        "pinned to a platform default, the lock file cannot be pointed "
+        "anywhere, and a second instance locks a path nobody else uses.",
+        suites=("tests.unit.test_config", "tests.concurrency.test_single_instance"),
+    ),
+    Mutant(
+        name="sleep-ignores-a-stop-request",
+        path="src/boot_err_shim/daemon.py",
+        old="    def sleep(self, seconds: float) -> bool:\n        return self.stop.wait(seconds)",
+        new="    def sleep(self, seconds: float) -> bool:\n"
+        "        import time as _t\n\n        _t.sleep(min(seconds, 3))\n"
+        "        return self.stop.is_set()",
+        tier="8 concurrency",
+        rationale="A ten-minute post-fix sleep would mean a ten-minute "
+        "`service stop`.",
+        suites=("tests.concurrency.test_signals_and_writes",),
+    ),
     Mutant(
         name="log-newline-not-escaped",
         path="src/boot_err_shim/log.py",
