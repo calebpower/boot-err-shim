@@ -1,0 +1,17 @@
+# Normalize to LF in the repository.
+* text=auto eol=lf
+
+# These are executed by an interpreter on the target and MUST be LF. A CRLF
+# rc script fails on FreeBSD with a bewildering "not found" pointing at the
+# interpreter line, because the \r becomes part of the interpreter path.
+init/rc.d/*        text eol=lf
+*.sh               text eol=lf
+*.py               text eol=lf
+init/*.service     text eol=lf
+containers/*       text eol=lf
+Makefile           text eol=lf
+
+# Fixtures are compared byte for byte; never touch them.
+tests/golden/**    -text
+tests/corpora/**   -text
+*.png              binary

@@ -1,0 +1,63 @@
+# boot-err-shim configuration
+#
+# Durations accept plain seconds (120) or a suffix ("2m", "90s", "1h").
+# Commented-out keys are detected from the operating system, so this same file
+# works on FreeBSD and on Linux. Uncomment only to override.
+#
+# Unknown keys are a hard error, not a warning. A typo you do not notice means
+# a setting you believe is in force but is not.
+
+[target]
+# The host to watch. This is the machine with the failing controller, not the
+# iDRAC -- we ping the host and look at its console through the iDRAC.
+host = "10.0.0.50"
+
+[ping]
+interval       = 120        # between checks while the host is healthy
+retry_interval = 120        # between checks once it has started failing
+threshold      = 3          # consecutive failures before we look at the console
+timeout        = 15         # backstop; kills a ping that ignores its own -W
+
+# Platform-detected. FreeBSD's -W is MILLISECONDS, iputils' -W is SECONDS --
+# copying a command between the two silently breaks it, which is why this is
+# derived from the OS rather than written down here.
+# command = ["ping", "-c", "1", "-W", "2000", "{host}"]
+
+[vnc]
+host            = "10.0.0.51"   # the iDRAC
+port            = 5901
+password        = "changeme"    # then: chmod 600 this file
+tls             = false         # true if iDRAC "SSL Encryption" is enabled
+connect_timeout = 10
+read_timeout    = 30            # deadline for the whole framebuffer read
+
+[detect]
+# Exactly what should be on screen. Leading and trailing whitespace on each
+# line is ignored, and matching is case-insensitive, so this does not have to
+# reproduce the console's own wrapping.
+text = """
+Disabling writes to flash as the flash part has gone bad.
+Please contact technical support to resolve this issue.
+Please press 'Y' to continue.
+"""
+
+key       = "Y"             # a single printable character, or Return/Escape/F1...
+engine    = "calibrated"    # "calibrated" (default) or "ocr"
+tolerance = 0.02            # fraction of region pixels allowed to differ
+
+# Written by `boot-err-shim configure`. Platform-detected.
+# calibration = "/var/lib/boot-err-shim/calibration.toml"
+
+[recovery]
+interval       = 60         # after a failed connect, or a screen with no match
+post_fix_sleep = 600        # after pressing the key
+max_per_day    = 3          # warn above this many interventions in 24h
+notify_command = []         # optional, e.g. ["/usr/local/bin/page-me"]
+
+[log]
+level           = "INFO"
+syslog          = "auto"    # auto | always | never
+screenshot_keep = 20        # ring buffer; every examined frame is written
+
+# file          = "/var/log/boot-err-shim.log"
+# screenshot_dir = "/var/lib/boot-err-shim/snapshots"

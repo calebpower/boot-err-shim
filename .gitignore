@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+*.pyz
+.ruff_cache/
+
+# Test and run artifacts
+evidence/
+.e2e-out/
+*.snapshot.png
