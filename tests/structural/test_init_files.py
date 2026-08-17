@@ -218,6 +218,41 @@ class TestRcScript(unittest.TestCase):
         self.assertIn("install -d", body)
         self.assertIn("${piddir}", body)
 
+    def test_precmd_checks_the_log_file_is_writable(self) -> None:
+        """Everything the service user needs is checked before the fork.
+
+        After it, daemon(8) sends stderr to /dev/null and daemon -r restarts
+        the process, so a permission problem becomes a silent crash loop with
+        an empty log -- the one symptom that gives an operator nothing to go
+        on. check-config cannot cover this: it runs as root, and root can
+        write anywhere.
+        """
+        body = self.text.split("boot_err_shim_precmd()", 1)[1]
+        body = body.split("boot_err_shim_postcmd()", 1)[0]
+        self.assertIn("_logfile", body)
+        self.assertIn("log.file", body)
+
+    def test_precmd_checks_everything_the_service_user_touches(self) -> None:
+        # The config, the state directory, the pid directory and the log
+        # file. Each of these has failed in practice, every one of them after
+        # the fork where nothing is visible.
+        body = self.text.split("boot_err_shim_precmd()", 1)[1]
+        body = body.split("boot_err_shim_postcmd()", 1)[0]
+        for needle in (
+            "${boot_err_shim_config}",
+            "${boot_err_shim_state}",
+            "${piddir}",
+            "_logfile",
+        ):
+            with self.subTest(checks=needle):
+                self.assertIn(needle, body)
+
+    def test_the_log_path_comes_from_the_program(self) -> None:
+        # Parsed from check-config rather than by reading TOML in sh, so
+        # there is one source of truth for where the log goes.
+        self.assertIn("check-config", self.text)
+        self.assertIn('$1 == "log" && $2 == "file"', self.text)
+
     def test_it_supervises_with_daemon(self) -> None:
         self.assertIn("/usr/sbin/daemon", self.text)
         self.assertIn("-r ", self.text)

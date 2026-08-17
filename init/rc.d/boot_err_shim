@@ -185,6 +185,56 @@ boot_err_shim_precmd()
 		    "${shim} check-config -c ${boot_err_shim_config}"
 	fi
 
+	# If a log file is configured, the service user has to be able to write
+	# it -- checked here because after the fork daemon(8) sends the very
+	# error that would explain this to /dev/null, and daemon -r then restarts
+	# the process in a loop while the log the operator is watching stays
+	# empty. check-config cannot catch it either: it runs as root, and root
+	# can write anywhere.
+	#
+	# The path comes from the program rather than from parsing TOML in sh,
+	# so there is one source of truth for where the log goes.
+	_logfile=$("${shim}" check-config -c "${boot_err_shim_config}" 2>/dev/null \
+	    | awk '$1 == "log" && $2 == "file" { print $3 }')
+	case "${_logfile}" in
+	""|none)
+		;;
+	*)
+		if [ -e "${_logfile}" ]; then
+			_target="${_logfile}"
+		else
+			# Not there yet, so it is the directory that must allow
+			# creating it.
+			_target=$(dirname "${_logfile}")
+		fi
+		_lo=$(stat -f '%Su' "${_target}")
+		_lg=$(stat -f '%Sg' "${_target}")
+		_lm=$(stat -f '%Lp' "${_target}")
+		_writable=no
+		case "${_lm}" in
+		*[2367]) _writable=yes ;;
+		esac
+		if [ "${_lo}" = "${boot_err_shim_user}" ]; then
+			case "${_lm}" in
+			[2367]*) _writable=yes ;;
+			esac
+		fi
+		if id -Gn "${boot_err_shim_user}" 2>/dev/null | tr ' ' '\n' \
+		    | grep -qx "${_lg}"; then
+			case "${_lm}" in
+			?[2367]*) _writable=yes ;;
+			esac
+		fi
+		if [ "${_writable}" != yes ]; then
+			err 1 "log.file ${_logfile}: ${_target} (owner ${_lo}:${_lg}," \
+			    "mode ${_lm}) is not writable by ${boot_err_shim_user}," \
+			    "so the daemon exits at startup and logs nothing. Run:" \
+			    "touch ${_logfile} && chown ${boot_err_shim_user}" \
+			    "${_logfile}"
+		fi
+		;;
+	esac
+
 	if [ ! -d "${boot_err_shim_state}" ]; then
 		err 1 "${boot_err_shim_state} does not exist. Run:" \
 		    "mkdir -p ${boot_err_shim_state} && chown" \
