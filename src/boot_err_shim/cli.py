@@ -602,6 +602,39 @@ COMMANDS = {
 }
 
 
+def _log_fatal(exc: ShimError) -> None:
+    """Send a fatal error to the configured sinks, not only to stderr.
+
+    Under rc(8) stderr goes to /dev/null, and `run` does a good deal between
+    configuring logging and emitting its first event: loading the
+    calibration, building the prober, installing signal handlers, taking the
+    single-instance lock. Anything failing in that window -- a lock already
+    held is the likely one -- left the log file completely empty while the
+    service appeared to start and do nothing, which is the least diagnosable
+    state this program has.
+
+    Best effort by design. If logging was never configured there is nowhere
+    to send it, and stderr still gets the message either way.
+    """
+    import logging
+
+    from .log import event, get_logger
+
+    logger = get_logger()
+    if not logger.handlers:
+        return
+    try:
+        event(
+            logger,
+            logging.ERROR,
+            "fatal",
+            error=type(exc).__name__,
+            detail=str(exc),
+        )
+    except Exception:  # noqa: BLE001 - reporting must never mask the failure
+        pass
+
+
 def _make_output_lossy() -> None:
     """Never let printing be the thing that fails.
 
@@ -636,6 +669,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return handler(args)
     except ShimError as exc:
+        _log_fatal(exc)
         print(f"boot-err-shim: {exc}", file=sys.stderr)
         if args.debug:
             raise

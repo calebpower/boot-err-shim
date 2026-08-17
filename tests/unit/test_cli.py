@@ -310,6 +310,80 @@ class TestTestDetect(CliFixture):
         self.assertEqual(code, CalibrationStale.exit_code)
 
 
+class TestFatalErrorsReachTheLog(CliFixture):
+    """A fatal error must go where the operator is looking.
+
+    Under rc(8) stderr is /dev/null, and `run` does real work between
+    configuring logging and emitting its first event -- loading the
+    calibration, taking the single-instance lock. A failure in that window
+    used to leave the configured log file completely empty while the service
+    appeared to start and then do nothing.
+    """
+
+    def test_it_is_logged_as_well_as_printed(self) -> None:
+        import logging
+
+        from boot_err_shim.errors import LockError
+        from boot_err_shim.log import setup_logging
+
+        stream = io.StringIO()
+        setup_logging(stream=stream, syslog="never")
+        self.addCleanup(self._reset_logging)
+
+        with mock.patch.dict(
+            cli.COMMANDS, {"capture": mock.Mock(side_effect=LockError("held by pid 42"))}
+        ):
+            code, _out, err = run_cli(["capture", "-c", str(self.config_path)])
+
+        self.assertEqual(code, LockError.exit_code)
+        self.assertIn("boot-err-shim:", err, "stderr should still get it")
+        logged = stream.getvalue()
+        self.assertIn("fatal", logged)
+        self.assertIn("LockError", logged)
+        self.assertIn("held by pid 42", logged)
+
+    def test_it_reaches_a_configured_log_file(self) -> None:
+        # The case that matters: the operator is tailing a file, stderr is
+        # discarded, and this is the only way the reason gets to them.
+        from boot_err_shim.errors import CalibrationError
+        from boot_err_shim.log import setup_logging
+
+        target = self.dir / "shim.log"
+        setup_logging(stream=io.StringIO(), syslog="never", file=target)
+        self.addCleanup(self._reset_logging)
+
+        with mock.patch.dict(
+            cli.COMMANDS,
+            {"capture": mock.Mock(side_effect=CalibrationError("stale"))},
+        ):
+            run_cli(["capture", "-c", str(self.config_path)])
+
+        self._reset_logging()
+        self.assertIn("fatal", target.read_text(encoding="utf-8"))
+
+    def test_it_is_silent_when_logging_was_never_configured(self) -> None:
+        # Nothing to write to, and it must not invent a handler or raise.
+        from boot_err_shim.errors import ConfigError
+
+        self._reset_logging()
+        with mock.patch.dict(
+            cli.COMMANDS, {"capture": mock.Mock(side_effect=ConfigError("bad"))}
+        ):
+            code, _out, err = run_cli(["capture", "-c", str(self.config_path)])
+        self.assertEqual(code, ConfigError.exit_code)
+        self.assertIn("bad", err)
+
+    def _reset_logging(self) -> None:
+        import logging
+
+        from boot_err_shim.log import LOGGER_NAME
+
+        logger = logging.getLogger(LOGGER_NAME)
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+            handler.close()
+
+
 class TestAsciiOutput(CliFixture):
     """Printing must not be the thing that fails.
 
