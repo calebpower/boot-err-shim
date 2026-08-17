@@ -33,7 +33,20 @@ IMAGE       ?= boot-err-shim-e2e
 STAGES      ?= all
 DESTDIR     ?=
 PREFIX      ?= /usr/local
-SERVICE_USER ?= boot-err-shim
+SERVICE_USER  ?= boot-err-shim
+SERVICE_GROUP ?= $(SERVICE_USER)
+
+# Numeric ids for the service account. Empty means "pick a free one in the
+# system range".
+#
+# FreeBSD reserves everything below 1000 for system accounts, and `pw useradd`
+# with no -u allocates from 1000 upwards -- so the obvious command puts a
+# daemon account in with the humans. Ports avoid this by drawing from the
+# registry in /usr/ports/UIDs; there is no entry for this, so `make
+# freebsd-user` finds the first free pair from 200 up and tells you what it
+# chose.
+SERVICE_UID   ?=
+SERVICE_GID   ?=
 
 .PHONY: help
 help:
@@ -123,6 +136,48 @@ install-common: bundle
 	install -d $(DESTDIR)$(PREFIX)/sbin
 	install -m 0755 boot-err-shim.pyz $(DESTDIR)$(PREFIX)/sbin/boot-err-shim
 
+# Create the service account in the system id range. Idempotent: an existing
+# account is reported, never modified, because changing a uid out from under
+# files that reference it numerically is not something a build target should
+# do behind your back.
+.PHONY: freebsd-user
+freebsd-user:
+	@user='$(SERVICE_USER)'; group='$(SERVICE_GROUP)'; \
+	uid='$(SERVICE_UID)'; gid='$(SERVICE_GID)'; \
+	free_id() { \
+		n=$$2; \
+		while grep -q "^[^:]*:[^:]*:$$n:" "$$1" 2>/dev/null; do \
+			n=$$((n + 1)); \
+		done; \
+		echo "$$n"; \
+	}; \
+	if pw usershow "$$user" > /dev/null 2>&1; then \
+		cur=$$(pw usershow "$$user" | awk -F: '{print $$3}'); \
+		echo "$$user already exists with uid $$cur"; \
+		if [ "$$cur" -ge 1000 ]; then \
+			echo; \
+			echo "  That is outside the system range. To move it:"; \
+			echo "    service boot_err_shim stop"; \
+			echo "    pw groupmod $$group -g <NEW_GID>"; \
+			echo "    pw usermod $$user -u <NEW_UID> -g $$group"; \
+			echo "    chown -R $$user:$$group /var/db/boot-err-shim"; \
+			echo "    chown root:$$group $(PREFIX)/etc/boot-err-shim.conf"; \
+			echo "    service boot_err_shim start"; \
+			echo; \
+			echo "  The chowns matter: pw changes the id, not the files that"; \
+			echo "  already carry the old one, and they would be orphaned."; \
+		fi; \
+		exit 0; \
+	fi; \
+	[ -n "$$gid" ] || gid=$$(free_id /etc/group 200); \
+	[ -n "$$uid" ] || uid=$$(free_id /etc/passwd "$$gid"); \
+	pw groupshow "$$group" > /dev/null 2>&1 || pw groupadd "$$group" -g "$$gid"; \
+	pw useradd "$$user" -u "$$uid" -g "$$group" \
+		-d /nonexistent -s /usr/sbin/nologin \
+		-c 'boot-err-shim daemon'; \
+	echo "created $$user (uid $$uid) and group $$group (gid $$gid)"; \
+	echo "if you later install a port wanting those ids, pw will say so"
+
 .PHONY: install-freebsd
 install-freebsd: install-common
 	install -d $(DESTDIR)$(PREFIX)/etc
@@ -137,18 +192,19 @@ install-freebsd: install-common
 	@# would leave the daemon unable to write its calibration or lock file.
 	@# Prefixed with - so a first install, or a staged build where the account
 	@# does not exist, is not a failure.
-	-chown -R $(SERVICE_USER) $(DESTDIR)/var/db/boot-err-shim
+	-chown -R $(SERVICE_USER):$(SERVICE_GROUP) $(DESTDIR)/var/db/boot-err-shim
 	@echo
 	@echo 'Installed. Next (or on an update, only if start complains):'
-	@echo '  # 1. the service user, first: everything below refers to it'
-	@echo '  pw useradd $(SERVICE_USER) -d /nonexistent -s /usr/sbin/nologin || true'
-	@echo '  chown -R $(SERVICE_USER) /var/db/boot-err-shim'
+	@echo '  # 1. the service user, first: everything below refers to it.'
+	@echo '  #    Uses the system id range; a plain pw useradd would not.'
+	@echo '  make freebsd-user'
+	@echo '  chown -R $(SERVICE_USER):$(SERVICE_GROUP) /var/db/boot-err-shim'
 	@echo
 	@echo '  # 2. the config. It must be READABLE BY $(SERVICE_USER), which'
 	@echo '  #    root-owned 0600 is not -- that is the usual first failure.'
 	@echo '  cp $(PREFIX)/etc/boot-err-shim.conf.sample $(PREFIX)/etc/boot-err-shim.conf'
 	@echo '  $$EDITOR $(PREFIX)/etc/boot-err-shim.conf'
-	@echo '  chown root:$(SERVICE_USER) $(PREFIX)/etc/boot-err-shim.conf'
+	@echo '  chown root:$(SERVICE_GROUP) $(PREFIX)/etc/boot-err-shim.conf'
 	@echo '  chmod 640 $(PREFIX)/etc/boot-err-shim.conf'
 	@echo
 	@echo '  # 3. start it'

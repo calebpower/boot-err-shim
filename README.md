@@ -57,9 +57,13 @@ without one is guesswork, and this program declines to guess about keystrokes.
 make install-freebsd
 
 # The service user. The rc script defaults to it and will refuse to start
-# without it; `make install-freebsd` prints this line but does not run it.
-pw useradd boot-err-shim -d /nonexistent -s /usr/sbin/nologin
-chown -R boot-err-shim /var/db/boot-err-shim
+# without it; `make install-freebsd` prints this step but does not run it.
+#
+# Use the target rather than a bare `pw useradd`: FreeBSD reserves everything
+# below 1000 for system accounts, and pw with no -u allocates from 1000 up,
+# which puts a daemon account in among the humans.
+make freebsd-user
+chown -R boot-err-shim:boot-err-shim /var/db/boot-err-shim
 
 cp /usr/local/etc/boot-err-shim.conf.sample /usr/local/etc/boot-err-shim.conf
 $EDITOR /usr/local/etc/boot-err-shim.conf
@@ -79,6 +83,39 @@ service boot_err_shim start
 names whichever one is wrong. On Linux none of this applies: the systemd unit
 uses `DynamicUser` and `LoadCredential`, so there is no account to create and
 the config stays root-owned `0600`.
+
+### Moving the service account into the system id range
+
+`make freebsd-user` picks the first free pair from 200 up, or takes
+`SERVICE_UID=` and `SERVICE_GID=`. If the account already exists it says so and
+changes nothing — moving a uid out from under files that carry it numerically
+is not something an install target should do unannounced.
+
+To move one that was created with a plain `pw useradd` and landed at 1000+:
+
+```sh
+service boot_err_shim stop
+
+pw groupmod boot-err-shim -g 213
+pw usermod  boot-err-shim -u 213 -g boot-err-shim
+
+# pw changes the id, not the files already carrying the old one. Without
+# these they are left owned by a number with no account behind it, and the
+# daemon can no longer read its config or write its calibration.
+chown -R boot-err-shim:boot-err-shim /var/db/boot-err-shim
+chown root:boot-err-shim /usr/local/etc/boot-err-shim.conf
+chown boot-err-shim /var/log/boot-err-shim.log     # only if log.file is set
+
+service boot_err_shim start
+```
+
+`/var/run/boot_err_shim` needs nothing: `start_precmd` recreates it with the
+right ownership on every start, since `/var/run` does not survive a reboot.
+
+Pick a number that is free now and unlikely to be claimed later. Ports draw
+from the registry in `/usr/ports/UIDs` and `/usr/ports/GIDs`; there is no entry
+for this program, so check those files if you have a ports tree, and `pw` will
+refuse a collision with anything already present.
 
 ### Updating an existing install
 
