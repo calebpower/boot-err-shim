@@ -14,7 +14,7 @@ from boot_err_shim.bitmap import binarise  # noqa: E402
 from boot_err_shim.calibrate import analyse  # noqa: E402
 from boot_err_shim.errors import AnalysisError  # noqa: E402
 from boot_err_shim.frame import Frame  # noqa: E402
-from boot_err_shim.log import ShimFormatter, event  # noqa: E402
+from boot_err_shim.log import NOTICE, ShimFormatter, event  # noqa: E402
 from boot_err_shim.report import (  # noqa: E402
     connection_report,
     failure_advice,
@@ -165,7 +165,9 @@ class TestLogLineFormat(unittest.TestCase):
         logger.setLevel(logging.DEBUG)
         logger.propagate = False
 
-        event(logger, logging.INFO, "daemon.start", host="10.0.0.50",
+        # NOTICE, not INFO: lifecycle events have to clear syslog's
+        # notice threshold or a healthy daemon is invisible.
+        event(logger, NOTICE, "daemon.start", host="10.0.0.50",
               vnc="10.0.0.51:5901", threshold=3, calibrated=True, no_act=False)
         event(logger, logging.INFO, "ping.up", host="10.0.0.50",
               reason="ok", failures=0, threshold=3)
@@ -182,7 +184,7 @@ class TestLogLineFormat(unittest.TestCase):
               detail="controller is failing repeatedly; replace it")
         event(logger, logging.ERROR, "key.refused", key="Y",
               detail="no calibration")
-        event(logger, logging.INFO, "daemon.stop")
+        event(logger, NOTICE, "daemon.stop")
         return stream.getvalue()
 
     def test_event_lines(self) -> None:

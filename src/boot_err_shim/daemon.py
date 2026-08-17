@@ -29,7 +29,7 @@ from .config import Config
 from .errors import ProtocolError, ShimError
 from .frame import Frame
 from .history import InterventionHistory
-from .log import event, get_logger
+from .log import NOTICE, event, get_logger
 from .probe import ProbeResult
 
 log = get_logger("daemon")
@@ -300,7 +300,7 @@ class Daemon:
         """Loop until stopped."""
         event(
             log,
-            logging.INFO,
+            NOTICE,
             "daemon.start",
             host=self.config.target.host,
             vnc=f"{self.config.vnc.host}:{self.config.vnc.port}",
@@ -311,7 +311,7 @@ class Daemon:
         if not self.calibrated:
             event(
                 log,
-                logging.WARNING,
+                NOTICE,
                 "daemon.uncalibrated",
                 detail="no calibration; keys will NOT be pressed. "
                 "Run: boot-err-shim configure",
@@ -333,7 +333,7 @@ class Daemon:
                 )
                 self.stopped = self.clock.sleep(self.config.recovery.interval)
 
-        event(log, logging.INFO, "daemon.stop")
+        event(log, NOTICE, "daemon.stop")
 
     # -- recovery -------------------------------------------------------
 

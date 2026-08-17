@@ -28,6 +28,21 @@ from .errors import ConfigError
 
 LOGGER_NAME = "boot_err_shim"
 
+#: Between INFO and WARNING, for lifecycle events.
+#:
+#: Python has no notice level and syslog does, which matters more than it
+#: sounds: FreeBSD's stock /etc/syslog.conf routes *.notice and above to
+#: /var/log/messages and drops everything below. With "I have started, here is
+#: my configuration" logged at INFO, a healthy daemon was completely silent,
+#: so silence meant either working perfectly or dead and there was no way to
+#: tell from the log.
+#:
+#: Lifecycle events -- started, stopped, refusing to act -- sit here. Routine
+#: polling stays at INFO, where a stock syslogd will not repeat it every two
+#: minutes forever.
+NOTICE = 25
+logging.addLevelName(NOTICE, "NOTICE")
+
 #: Sentinel field values that would otherwise render ambiguously.
 _EMPTY = "-"
 
@@ -135,6 +150,9 @@ def _syslog_handler(address: Path | None) -> logging.Handler | None:
         return None
     handler.setFormatter(ShimFormatter(with_time=False))
     handler.ident = "boot-err-shim: "
+    # SysLogHandler keys its priority map on the level *name*, and knows
+    # nothing about one we invented.
+    handler.priority_map["NOTICE"] = "notice"
     return handler
 
 

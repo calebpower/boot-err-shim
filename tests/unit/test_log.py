@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import unittest
 from unittest import mock
 
@@ -95,6 +96,65 @@ class TestFormatting(unittest.TestCase):
         self.assertEqual(
             render("e", path=PurePosixPath("/var/lib/x")), "INFO e path=/var/lib/x"
         )
+
+
+class TestNoticeLevel(unittest.TestCase):
+    """Lifecycle events must clear syslog's notice threshold.
+
+    FreeBSD's stock /etc/syslog.conf routes *.notice and above to
+    /var/log/messages and drops the rest. With "I have started" at INFO, a
+    healthy daemon was completely silent -- so silence meant either running
+    perfectly or dead, with no way to tell from the log.
+    """
+
+    def test_notice_sits_between_info_and_warning(self) -> None:
+        from boot_err_shim.log import NOTICE
+
+        self.assertGreater(NOTICE, logging.INFO)
+        self.assertLess(NOTICE, logging.WARNING)
+
+    def test_it_renders_with_its_own_name(self) -> None:
+        from boot_err_shim.log import NOTICE
+
+        self.assertEqual(render("daemon.start", NOTICE), "NOTICE daemon.start")
+
+    def test_it_is_visible_at_the_default_level(self) -> None:
+        from boot_err_shim.log import NOTICE
+
+        stream = io.StringIO()
+        setup_logging(stream=stream, syslog="never", level="INFO")
+        event(get_logger(), NOTICE, "daemon.start")
+        self.assertIn("daemon.start", stream.getvalue())
+
+    def test_the_syslog_handler_maps_it_to_notice(self) -> None:
+        # SysLogHandler keys its priority map on the level name and knows
+        # nothing about one we invented; without the mapping it would fall
+        # back to warning, which is the wrong severity for "I started".
+        import tempfile
+        from pathlib import Path
+
+        from boot_err_shim.log import _syslog_handler
+
+        if os.name != "posix":
+            self.skipTest(
+                "needs a real AF_UNIX socket; the Linux container covers it, "
+                "and the mapping itself is asserted below on every platform"
+            )
+
+        import socket
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "log"
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            server.bind(str(path))
+            self.addCleanup(server.close)
+
+            handler = _syslog_handler(path)
+            self.addCleanup(handler.close)
+            self.assertEqual(handler.priority_map["NOTICE"], "notice")
+
+    def test_the_mapping_is_declared_for_the_handler_to_find(self) -> None:
+        self.assertEqual(logging.getLevelName(25), "NOTICE")
 
 
 class TestTimestamp(unittest.TestCase):
