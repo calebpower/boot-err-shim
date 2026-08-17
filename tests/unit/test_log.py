@@ -205,6 +205,16 @@ class TestExceptionRendering(unittest.TestCase):
 
 class TestSetupLogging(unittest.TestCase):
     def tearDown(self) -> None:
+        self._close_handlers()
+
+    def _close_handlers(self) -> None:
+        """Detach every sink.
+
+        Called explicitly, not only from tearDown, by tests that log into a
+        TemporaryDirectory: the rotating handler holds the file open, and on
+        Windows an open file cannot be deleted, so cleanup raises
+        PermissionError while the assertions themselves were fine.
+        """
         logger = logging.getLogger(LOGGER_NAME)
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
@@ -266,6 +276,103 @@ class TestSetupLogging(unittest.TestCase):
             setup_logging(stream=stream, syslog="never")
             event(get_logger(), logging.INFO, "e")
         self.assertRegex(stream.getvalue().strip(), r"^\d{4}-\d{2}-\d{2}T")
+
+    def test_stderr_is_dropped_when_a_supervisor_would_duplicate_it(self) -> None:
+        """Off a terminal, with a real sink configured, stderr is redundant.
+
+        This is what lets the rc script capture daemon(8)'s output with -o
+        instead of throwing it away with -f. Without it the capture file
+        receives every event twice over and grows alongside the log; with it,
+        the file holds startup failures only.
+        """
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shim.log"
+            fake_stderr = io.StringIO()  # StringIO.isatty() is False
+            with (
+                mock.patch.dict("os.environ", {}, clear=True),
+                mock.patch("sys.stderr", fake_stderr),
+            ):
+                setup_logging(syslog="never", file=path)
+                event(get_logger(), logging.INFO, "e")
+
+            self._close_handlers()
+            self.assertEqual(fake_stderr.getvalue(), "")
+            self.assertIn("e", path.read_text(encoding="utf-8"))
+
+    def test_stderr_survives_when_it_is_the_only_sink(self) -> None:
+        # Dropping it here would log precisely nowhere.
+        fake_stderr = io.StringIO()
+        with (
+            mock.patch.dict("os.environ", {}, clear=True),
+            mock.patch("sys.stderr", fake_stderr),
+        ):
+            setup_logging(syslog="never")
+            event(get_logger(), logging.INFO, "e")
+        self.assertIn("e", fake_stderr.getvalue())
+
+    def test_stderr_survives_under_journald(self) -> None:
+        # Here stderr *is* the sink, even though it is not a terminal and a
+        # file is configured as well.
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_stderr = io.StringIO()
+            with (
+                mock.patch.dict("os.environ", {"JOURNAL_STREAM": "8:12345"}),
+                mock.patch("sys.stderr", fake_stderr),
+            ):
+                setup_logging(syslog="never", file=Path(tmp) / "shim.log")
+                event(get_logger(), logging.INFO, "e")
+            self._close_handlers()
+            self.assertIn("e", fake_stderr.getvalue())
+
+    def test_stderr_survives_on_a_terminal(self) -> None:
+        # Somebody is watching it, and they asked for the output.
+        import tempfile
+        from pathlib import Path
+
+        class Tty(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_stderr = Tty()
+            with (
+                mock.patch.dict("os.environ", {}, clear=True),
+                mock.patch("sys.stderr", fake_stderr),
+            ):
+                setup_logging(syslog="never", file=Path(tmp) / "shim.log")
+                event(get_logger(), logging.INFO, "e")
+            self._close_handlers()
+            self.assertIn("e", fake_stderr.getvalue())
+
+    def test_an_explicit_stream_is_always_kept(self) -> None:
+        # Callers that pass a stream -- the test suite, mainly -- are asking
+        # for it by name, and the supervisor reasoning does not apply.
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            stream = io.StringIO()
+            with mock.patch.dict("os.environ", {}, clear=True):
+                setup_logging(stream=stream, syslog="never", file=Path(tmp) / "shim.log")
+                event(get_logger(), logging.INFO, "e")
+            self._close_handlers()
+            self.assertIn("e", stream.getvalue())
+
+    def test_a_stream_that_cannot_answer_isatty_is_not_fatal(self) -> None:
+        closed = io.StringIO()
+        closed.close()  # isatty() on a closed StringIO raises ValueError
+        with (
+            mock.patch.dict("os.environ", {}, clear=True),
+            mock.patch("sys.stderr", closed),
+        ):
+            setup_logging(syslog="never")
+        self.assertEqual(len(logging.getLogger(LOGGER_NAME).handlers), 1)
 
     def test_file_handler_is_added_and_writes(self) -> None:
         import tempfile

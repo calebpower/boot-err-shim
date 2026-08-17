@@ -204,8 +204,23 @@ general:
 stderr, and the daemon notices journald and skips syslog so nothing appears
 twice.
 
-**FreeBSD (rc.d).** `daemon(8)` sends stderr to `/dev/null`, so syslog is the
-only sink — and this catches people out:
+**FreeBSD (rc.d).** Two places, and the second one matters when the first is
+empty:
+
+| File | Holds |
+|---|---|
+| syslog, or `log.file` if set | everything the daemon logs, once running |
+| `/var/db/boot-err-shim/startup.log` | anything it said before it got that far |
+
+`daemon(8)` captures the forked process's stdout and stderr into that second
+file, truncated on each `service start`. On a healthy daemon it stays nearly
+empty — the program drops its stderr sink when it is off a terminal and has a
+real one configured — so **if the log you configured is empty, read the startup
+log.** Everything that kills the process between exec and its first log line
+lands there: a shebang that will not resolve, a pidfile it cannot write, a lock
+another instance is holding.
+
+Syslog then catches people out in its own way:
 
 > FreeBSD's stock `/etc/syslog.conf` routes `*.notice` and above to
 > `/var/log/messages`. This program logs routine events at **INFO**, which is

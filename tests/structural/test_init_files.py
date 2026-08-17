@@ -257,6 +257,34 @@ class TestRcScript(unittest.TestCase):
         self.assertIn("/usr/sbin/daemon", self.text)
         self.assertIn("-r ", self.text)
 
+    def test_the_forked_output_is_captured_and_not_discarded(self) -> None:
+        """daemon -f is what made four separate faults invisible.
+
+        Everything between exec and the first log line -- the interpreter, the
+        pidfile, the lock -- reports on stderr, and -f sends that to
+        /dev/null. The result each time was a service that appeared to start
+        and did nothing, with an empty log and no way in.
+
+        precmd now covers the failures we know about, but the point of this is
+        the ones we do not: -o keeps the next unfamiliar failure legible.
+        """
+        args = self.text.split("command_args=", 1)[1].split("\n\n", 1)[0]
+        self.assertNotIn("-f ", args)
+        self.assertIn("-o ${startuplog}", args)
+
+    def test_the_captured_output_is_prepared_for_the_service_user(self) -> None:
+        # Same lesson as the pidfile: daemon(8) may open this after dropping
+        # privilege, so root creating it lazily is not good enough.
+        body = self.text.split("boot_err_shim_precmd()", 1)[1]
+        body = body.split("boot_err_shim_postcmd()", 1)[0]
+        self.assertIn("${startuplog}", body)
+        self.assertIn('chown "${boot_err_shim_user}', body)
+
+    def test_restarts_are_spaced_out(self) -> None:
+        # -r with no delay retries a permanently broken config as fast as the
+        # process can exit, which now writes to the capture file each time.
+        self.assertIn("-R ", self.text)
+
     def test_the_binary_path_matches_the_makefile(self) -> None:
         # install-common puts it in $(PREFIX)/sbin with PREFIX=/usr/local.
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")

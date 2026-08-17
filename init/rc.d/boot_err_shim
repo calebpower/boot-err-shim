@@ -65,18 +65,29 @@ export PATH
 # title, which is exactly the string rc.subr matches against here.
 procname="/usr/sbin/daemon"
 
-# daemon(8) supervises: -r restarts the program if it exits, -f sends its
-# output to /dev/null, and -u drops privilege. The daemon needs none: ping(8)
-# is setuid and VNC is an ordinary TCP connection.
+# daemon(8) supervises: -r restarts the program if it exits, -u drops
+# privilege, and -o captures whatever the child writes to stdout or stderr.
 #
-# Output goes to /dev/null rather than to syslog because the program has its
-# own syslog handler and would otherwise appear twice in the log. Anything
-# that would be lost that way -- a bad config, an unreadable calibration --
-# is caught by start_precmd below, before the fork, where the operator can
-# still see it.
+# That last one used to be -f, sending it all to /dev/null on the reasoning
+# that the program has its own syslog handler and would otherwise log twice.
+# The reasoning was fine and the consequence was awful: every failure between
+# exec and the first log line -- a missing interpreter, an unwritable pidfile,
+# a lock already held -- vanished without trace, leaving a service that
+# appeared to start and did nothing. Four separate faults presented that way.
+#
+# Duplication is avoided at the other end instead: the program drops its
+# stderr handler when it is not on a terminal and has a real sink configured,
+# so this file collects startup failures and nothing else.
+startuplog="${boot_err_shim_state}/startup.log"
+
+# -R 15 spaces out restarts. Several fatal errors here are permanent -- a bad
+# config, a lock held by something else -- and -r alone retries those about as
+# fast as the process can exit, which with -o now capturing output would grow
+# the file without bound. Fifteen seconds keeps a genuine crash loop to a few
+# lines a minute while still recovering quickly from a transient fault.
 command="/usr/sbin/daemon"
-command_args="-r -f -P ${pidfile} -u ${boot_err_shim_user} \
-    ${shim} run -c ${boot_err_shim_config} ${boot_err_shim_flags}"
+command_args="-r -R 15 -o ${startuplog} -P ${pidfile} -u ${boot_err_shim_user} \
+    ${shim} run -c ${boot_err_shim_config}"
 
 start_precmd="${name}_precmd"
 stop_postcmd="${name}_postcmd"
@@ -247,6 +258,19 @@ boot_err_shim_precmd()
 		    "calibration or lock file. Run: chown -R" \
 		    "${boot_err_shim_user} ${boot_err_shim_state}"
 	fi
+
+	# Somewhere daemon(8) can write its captured output. Last, because it
+	# lives in the state directory checked just above.
+	#
+	# Created here, and owned by the service user, because daemon(8) may open
+	# it either side of dropping privilege -- the -P file taught us not to
+	# assume. Truncated on every start, so it describes this start rather than
+	# a fault from last week.
+	if ! : > "${startuplog}" 2>/dev/null; then
+		err 1 "cannot write ${startuplog}"
+	fi
+	chown "${boot_err_shim_user}:${boot_err_shim_group}" "${startuplog}"
+	chmod 0640 "${startuplog}"
 }
 
 boot_err_shim_postcmd()

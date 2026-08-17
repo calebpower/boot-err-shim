@@ -216,4 +216,43 @@ def setup_logging(
         rotating.setFormatter(ShimFormatter(with_time=True))
         logger.addHandler(rotating)
 
+    # Under a supervisor that captures our output, stderr is a duplicate.
+    #
+    # This exists so the FreeBSD rc script can run daemon(8) with -o instead
+    # of -f. It used to use -f, discarding everything, because otherwise every
+    # event landed in both the capture file and the operator's real log; the
+    # cost was that any failure before the first log line -- a missing
+    # interpreter, an unwritable pidfile, a lock already held -- disappeared
+    # entirely, and the service looked like it started and did nothing.
+    #
+    # Dropping the console handler here is what makes capturing affordable:
+    # the capture file then holds startup failures and tracebacks only, so it
+    # stays a few lines rather than growing without bound alongside the log.
+    #
+    # All three conditions are needed. A terminal means a person is watching
+    # and wants the output. journald means stderr *is* the sink, so dropping
+    # it would log nowhere at all. And with no other handler installed, stderr
+    # is all there is.
+    if (
+        stream is None
+        and not journald
+        and len(logger.handlers) > 1
+        and not _is_a_terminal(sys.stderr)
+    ):
+        logger.removeHandler(console)
+        console.close()
+
     return logger
+
+
+def _is_a_terminal(stream: Any) -> bool:
+    """Whether a stream is a terminal, tolerating streams that cannot say.
+
+    isatty() is not guaranteed to exist, and on a closed stream it raises.
+    Both mean "not a terminal" for our purposes, and neither is worth failing
+    startup over.
+    """
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError):
+        return False
